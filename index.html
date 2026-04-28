@@ -24,12 +24,37 @@
     const uid = () => `id_${Date.now()}_${++_counter}`;
 
     const createItem = () => ({
-      id: uid(), task: "", details: "", secondaryHow: "", frequency: "", priority: "", assignee: "", time: "", completed: false, lastCompleted: "",
+      id: uid(), task: "", details: "", how: "", secondaryHow: "", frequency: "", priority: "", assignee: "", time: "", supplies: "", completed: false, notNeeded: false, prevIncomplete: false, lastCompleted: "",
     });
 
     const createRoom = (name) => ({
       id: uid(), name, restocking: [], cleaning: [], monthly: [],
     });
+
+    const createZone = (name = "New Zone") => ({
+      id: uid(), type: 'zone', name, collapsed: false, items: [],
+    });
+
+    // Flatten a mixed list (zones + items) → just the task items
+    const flattenList = (list) => (list || []).flatMap(e => e.type === 'zone' ? e.items : [e]);
+
+    // Remove an item by id from anywhere in a mixed list
+    const deleteFromList = (list, id) =>
+      list.map(e => e.type === 'zone' ? { ...e, items: e.items.filter(t => t.id !== id) } : e)
+          .filter(e => e.id !== id);
+
+    // Update a field on an item anywhere in a mixed list
+    const updateInList = (list, id, field, val) =>
+      list.map(e => {
+        if (e.type === 'zone') {
+          const idx = e.items.findIndex(t => t.id === id);
+          if (idx < 0) return e;
+          const items = [...e.items];
+          items[idx] = { ...items[idx], [field]: val };
+          return { ...e, items };
+        }
+        return e.id === id ? { ...e, [field]: val } : e;
+      });
 
     const LOCATIONS = ["The Park House", "The Studio", "The Lamon House"];
 
@@ -109,28 +134,53 @@
     function EditableCell({ value, onSave, placeholder = "—" }) {
       const [editing, setEditing] = useState(false);
       const [draft, setDraft] = useState(value);
+      const taRef = React.useRef(null);
 
       const commit = () => { onSave(draft); setEditing(false); };
 
+      // Auto-resize whenever draft changes or editing opens
+      React.useEffect(() => {
+        if (taRef.current) {
+          taRef.current.style.height = "auto";
+          taRef.current.style.height = taRef.current.scrollHeight + "px";
+        }
+      }, [draft, editing]);
+
       if (editing) {
         return (
-          <input
+          <textarea
+            ref={taRef}
             autoFocus
             value={draft}
+            rows={1}
             onChange={e => setDraft(e.target.value)}
             onBlur={commit}
             onKeyDown={e => {
-              if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); commit(); }
-              if (e.key === "Escape") { setDraft(value); setEditing(false); }
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                // Cmd/Ctrl+Enter → insert newline at cursor
+                e.preventDefault();
+                const start = e.target.selectionStart;
+                const end   = e.target.selectionEnd;
+                const next  = draft.slice(0, start) + "\n" + draft.slice(end);
+                setDraft(next);
+                requestAnimationFrame(() => {
+                  if (taRef.current) taRef.current.selectionStart = taRef.current.selectionEnd = start + 1;
+                });
+              } else if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+                e.preventDefault(); commit();
+              } else if (e.key === "Escape") {
+                setDraft(value); setEditing(false);
+              }
             }}
-            className="w-full min-w-0 border border-blue-400 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 bg-blue-50"
+            style={{ resize: "none", overflow: "hidden" }}
+            className="w-full min-w-0 border border-blue-400 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 bg-blue-50 block"
           />
         );
       }
       return (
         <span
           onClick={() => { setDraft(value); setEditing(true); }}
-          className={`block min-h-5 rounded px-1.5 py-0.5 cursor-text text-xs hover:bg-blue-50 hover:ring-1 hover:ring-blue-200 transition-all ${
+          className={`block min-h-5 rounded px-1.5 py-0.5 cursor-text text-xs hover:bg-blue-50 hover:ring-1 hover:ring-blue-200 transition-all break-words whitespace-pre-wrap ${
             value ? "text-gray-800" : "text-gray-300 italic"
           }`}
         >
@@ -142,13 +192,24 @@
     // ─── AssigneeCell ─────────────────────────────────────────────────────────────
     function AssigneeCell({ value, employees, onSave }) {
       const [open, setOpen] = useState(false);
+      const [pos, setPos] = useState({ top: 0, left: 0 });
+      const btnRef = React.useRef(null);
       const initial = value ? value.charAt(0).toUpperCase() : null;
 
+      const handleOpen = () => {
+        if (btnRef.current) {
+          const r = btnRef.current.getBoundingClientRect();
+          setPos({ top: r.bottom + 4, left: r.left + r.width / 2 });
+        }
+        setOpen(v => !v);
+      };
+
       return (
-        <div className="relative flex justify-center">
+        <div className="flex justify-center">
           {/* Avatar bubble */}
           <button
-            onClick={() => setOpen(v => !v)}
+            ref={btnRef}
+            onClick={handleOpen}
             title={value || "Click to assign"}
             className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all select-none ${
               value
@@ -162,9 +223,10 @@
           {open && (
             <>
               {/* Backdrop to close on outside click */}
-              <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-              {/* Dropdown menu */}
-              <div className="absolute z-20 top-8 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 min-w-44 overflow-hidden">
+              <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+              {/* Dropdown — fixed so it escapes overflow:hidden on the panel */}
+              <div className="fixed z-50 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 min-w-44 overflow-hidden"
+                   style={{ top: pos.top, left: pos.left, transform: "translateX(-50%)" }}>
                 <button
                   onClick={() => { onSave(""); setOpen(false); }}
                   className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center gap-2 ${
@@ -205,14 +267,46 @@
     }
 
     // ─── ChecklistRow ─────────────────────────────────────────────────────────────
-    function ChecklistRow({ item, idx, total, employees, showAssignee, showTime, showPriority, showLastDone, onUpdate, onDelete, onMoveUp, onMoveDown, onDragStart, onDragOver, onDrop, onDragEnd, isDragging, isDragOver }) {
+    function ChecklistRow({ item, idx, total, employees, showHow, showSecondaryHow, showFrequency, showAssignee, showTime, showSupplies, showPriority, showLastDone, onUpdate, onDelete, onMoveUp, onMoveDown, onDragStart, onDragOver, onDrop, onDragEnd, isDragging, isDragOver, isInZone, zones, onMoveToZone, listKey, onMoveToList }) {
+      const [showMoveMenu,     setShowMoveMenu]     = useState(false);
+      const [showListMoveMenu, setShowListMoveMenu] = useState(false);
+      const [moveMenuPos,     setMoveMenuPos]     = useState({ bottom: 0, right: 0 });
+      const [listMoveMenuPos, setListMoveMenuPos] = useState({ bottom: 0, right: 0 });
+      const moveMenuBtnRef     = React.useRef(null);
+      const listMoveMenuBtnRef = React.useRef(null);
+
+      const openMoveMenu = () => {
+        if (moveMenuBtnRef.current) {
+          const r = moveMenuBtnRef.current.getBoundingClientRect();
+          setMoveMenuPos({ bottom: window.innerHeight - r.top + 4, right: window.innerWidth - r.right });
+        }
+        setShowMoveMenu(v => !v);
+      };
+      const openListMoveMenu = () => {
+        if (listMoveMenuBtnRef.current) {
+          const r = listMoveMenuBtnRef.current.getBoundingClientRect();
+          setListMoveMenuPos({ bottom: window.innerHeight - r.top + 4, right: window.innerWidth - r.right });
+        }
+        setShowListMoveMenu(v => !v);
+      };
       const today = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
       const ps = item.priority ? PRIORITY_STYLES[item.priority] : null;
 
       const handleCheck = () => {
         const nowDone = !item.completed;
         onUpdate("completed", nowDone);
-        if (nowDone) onUpdate("lastCompleted", today);
+        if (nowDone) {
+          onUpdate("lastCompleted", today);
+          if (item.notNeeded)     onUpdate("notNeeded", false);
+          if (item.prevIncomplete) onUpdate("prevIncomplete", false);
+        }
+      };
+
+      const handleNotNeeded = () => {
+        const nowNotNeeded = !item.notNeeded;
+        onUpdate("notNeeded", nowNotNeeded);
+        if (nowNotNeeded && item.completed)     onUpdate("completed", false);
+        if (nowNotNeeded && item.prevIncomplete) onUpdate("prevIncomplete", false);
       };
 
       return (
@@ -222,11 +316,14 @@
           onDragOver={onDragOver}
           onDrop={onDrop}
           onDragEnd={onDragEnd}
-          className={`border-b border-gray-100 group/row transition-all ${
-            isDragging  ? "opacity-40 bg-slate-100" :
-            isDragOver  ? "bg-blue-50 border-t-2 border-t-blue-400" :
-            item.completed ? "bg-green-50/40" :
-                          "hover:bg-slate-50/60"
+          className={`border-b border-gray-100 group/row transition-all ${isInZone ? "border-l-2 border-l-slate-200" : ""} ${
+            isDragging          ? "opacity-40 bg-slate-100" :
+            isDragOver          ? "bg-blue-50 border-t-2 border-t-blue-400" :
+            item.completed      ? "bg-green-50/40" :
+            item.notNeeded      ? "bg-amber-50/50" :
+            item.prevIncomplete ? "bg-rose-50/40" :
+            isInZone            ? "bg-slate-100/70 hover:bg-slate-200/50" :
+                                  "hover:bg-slate-50/60"
           }`}
         >
           {/* Drag handle */}
@@ -259,15 +356,45 @@
             </button>
           </td>
 
-          {["task", "details", "secondaryHow"].map(f => (
-            <td key={f} className="px-2 py-1.5 align-middle">
-              <EditableCell
-                value={item[f]}
-                onSave={val => onUpdate(f, val)}
-                placeholder="click to edit"
-              />
+          {/* Not-needed checkbox (△) */}
+          <td className="px-1 py-1.5 align-middle text-center" style={{ width: "2rem" }}>
+            <button
+              onClick={handleNotNeeded}
+              title={item.notNeeded ? "Clear not-needed" : "Mark as not needed"}
+              className={`w-5 h-5 rounded-full border-2 flex items-center justify-center mx-auto transition-all ${
+                item.notNeeded
+                  ? "bg-amber-400 border-amber-400 text-white"
+                  : "border-gray-300 hover:border-amber-400"
+              }`}
+            >
+              {item.notNeeded && (
+                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 16 16">
+                  <path d="M8 2 L14.5 13 L1.5 13 Z"/>
+                </svg>
+              )}
+            </button>
+          </td>
+
+          {/* Task cell — shows PRV INC badge if applicable */}
+          <td className="px-2 py-1.5 align-top">
+            {item.prevIncomplete && (
+              <span className="no-print inline-block text-xs font-bold px-1.5 py-0 rounded border border-rose-300 bg-rose-100 text-rose-600 mb-0.5 leading-5">prv inc</span>
+            )}
+            <EditableCell value={item.task} onSave={val => onUpdate("task", val)} placeholder="click to edit" />
+          </td>
+          <td className="px-2 py-1.5 align-top">
+            <EditableCell value={item.details} onSave={val => onUpdate("details", val)} placeholder="click to edit" />
+          </td>
+          {showHow && (
+            <td className="px-2 py-1.5 align-top">
+              <EditableCell value={item.how} onSave={val => onUpdate("how", val)} placeholder="click to edit" />
             </td>
-          ))}
+          )}
+          {showSecondaryHow && (
+            <td className="px-2 py-1.5 align-top">
+              <EditableCell value={item.secondaryHow} onSave={val => onUpdate("secondaryHow", val)} placeholder="click to edit" />
+            </td>
+          )}
 
           {/* Priority — traffic light dropdown */}
           {showPriority && (
@@ -296,19 +423,21 @@
             </td>
           )}
 
-          {/* Frequency — fixed dropdown */}
-          <td className="px-2 py-1.5 align-middle" style={{ width: "9%" }}>
-            <select
-              value={item.frequency || ""}
-              onChange={e => onUpdate("frequency", e.target.value)}
-              className="w-full text-xs rounded border border-transparent bg-transparent cursor-pointer text-gray-700 hover:border-blue-300 hover:bg-blue-50 focus:outline-none focus:ring-1 focus:ring-blue-400 focus:border-blue-400 py-0.5 px-1 transition-all"
-            >
-              <option value="" disabled>— pick —</option>
-              {FREQUENCY_OPTIONS.map(opt => (
-                <option key={opt} value={opt}>{opt}</option>
-              ))}
-            </select>
-          </td>
+          {/* Frequency */}
+          {showFrequency && (
+            <td className="px-2 py-1.5 align-middle" style={{ width: "9%" }}>
+              <select
+                value={item.frequency || ""}
+                onChange={e => onUpdate("frequency", e.target.value)}
+                className="w-full text-xs rounded border border-transparent bg-transparent cursor-pointer text-gray-700 hover:border-blue-300 hover:bg-blue-50 focus:outline-none focus:ring-1 focus:ring-blue-400 focus:border-blue-400 py-0.5 px-1 transition-all"
+              >
+                <option value="" disabled>— pick —</option>
+                {FREQUENCY_OPTIONS.map(opt => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
+            </td>
+          )}
 
           {/* Assignee — bubble avatar with dropdown */}
           {showAssignee && (
@@ -323,12 +452,19 @@
 
           {/* Time */}
           {showTime && (
-            <td className="px-2 py-1.5 align-middle" style={{ width: "4rem" }}>
+            <td className="px-2 py-1.5 align-middle" style={{ width: "2.5rem" }}>
               <EditableCell
                 value={item.time}
                 onSave={val => onUpdate("time", val)}
                 placeholder="—"
               />
+            </td>
+          )}
+
+          {/* Supplies */}
+          {showSupplies && (
+            <td className="px-2 py-1.5 align-top">
+              <EditableCell value={item.supplies} onSave={val => onUpdate("supplies", val)} placeholder="—" />
             </td>
           )}
 
@@ -356,6 +492,75 @@
                   title="Move down"
                 >▼</button>
               </div>
+              {/* Move to zone button */}
+              {zones && zones.length > 0 && onMoveToZone && (
+                <div className="relative">
+                  <button
+                    ref={moveMenuBtnRef}
+                    onClick={openMoveMenu}
+                    className="p-1 rounded text-gray-300 hover:text-blue-500 hover:bg-blue-50 text-xs leading-none"
+                    title="Move to zone"
+                  >⊞</button>
+                  {showMoveMenu && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setShowMoveMenu(false)} />
+                      <div className="fixed z-50 bg-white rounded-xl shadow-xl border border-gray-200 py-1 min-w-40 overflow-hidden"
+                           style={{ bottom: moveMenuPos.bottom, right: moveMenuPos.right }}>
+                        {isInZone && (
+                          <button
+                            onClick={() => { onMoveToZone(null); setShowMoveMenu(false); }}
+                            className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50 flex items-center gap-2"
+                          >
+                            <span className="text-gray-400">↑</span> Top level
+                          </button>
+                        )}
+                        {zones.map(z => (
+                          <button key={z.id}
+                            onClick={() => { onMoveToZone(z.id); setShowMoveMenu(false); }}
+                            className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-blue-50 hover:text-blue-700 flex items-center gap-2 truncate"
+                          >
+                            <span className="text-gray-400">▸</span>
+                            <span className="truncate">{z.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+              {/* Move to different list */}
+              {onMoveToList && (
+                <div className="relative">
+                  <button
+                    ref={listMoveMenuBtnRef}
+                    onClick={openListMoveMenu}
+                    className="p-1 rounded text-gray-300 hover:text-indigo-500 hover:bg-indigo-50 leading-none transition-colors"
+                    title="Move to a different list"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+                    </svg>
+                  </button>
+                  {showListMoveMenu && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setShowListMoveMenu(false)} />
+                      <div className="fixed z-50 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 min-w-44 overflow-hidden"
+                           style={{ bottom: listMoveMenuPos.bottom, right: listMoveMenuPos.right }}>
+                        <p className="px-3 pb-1 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Move to list</p>
+                        {LIST_META.filter(m => m.key !== listKey).map(({ key, label, abbr, light, text, border }) => (
+                          <button key={key}
+                            onClick={() => { onMoveToList(key); setShowListMoveMenu(false); }}
+                            className={`w-full text-left px-3 py-1.5 text-xs font-semibold flex items-center gap-2 hover:${light} transition-colors`}
+                          >
+                            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold border ${light} ${text} ${border}`}>{abbr}</span>
+                            <span className={text}>{label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
               {/* Delete always visible */}
               <button onClick={onDelete}
                 className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 text-xs leading-none"
@@ -388,17 +593,40 @@
       );
     }
 
-    function ChecklistPanel({ title, accent, items, employees, onUpdate, onAdd, onDelete, onMove, onReorder }) {
+    function ChecklistPanel({ title, accent, list, employees, onUpdate, onAdd, onDelete, onMove,
+                              onAddZone, onDeleteZone, onRenameZone, onToggleZone,
+                              onAddItemToZone, onReorderTopLevel, onReorderInZone, onMoveTaskToZone, onMoveTaskCross,
+                              requestConfirm, listKey, onMoveToList }) {
       const c = ACCENT[accent] || ACCENT.amber;
-      const [showAssignee,  setShowAssignee]  = useState(true);
-      const [showTime,      setShowTime]      = useState(true);
-      const [showPriority,  setShowPriority]  = useState(true);
-      const [showLastDone,  setShowLastDone]  = useState(true);
-      const [dragIdx,       setDragIdx]       = useState(null);
-      const [dragOverIdx,   setDragOverIdx]   = useState(null);
+      const [showHow,          setShowHow]          = useState(true);
+      const [showSecondaryHow, setShowSecondaryHow] = useState(true);
+      const [showFrequency,    setShowFrequency]    = useState(true);
+      const [showAssignee,     setShowAssignee]     = useState(true);
+      const [showTime,         setShowTime]         = useState(true);
+      const [showSupplies,     setShowSupplies]     = useState(true);
+      const [showPriority,     setShowPriority]     = useState(true);
+      const [showLastDone,     setShowLastDone]     = useState(true);
+      // Unified drag state
+      // dragSrc: null | { kind:'topTask', topIdx, id } | { kind:'topZone', topIdx } | { kind:'zoneTask', zoneId, zIdx, id }
+      // dragOver: null | { kind:'topTask', topIdx } | { kind:'zoneHeader', zoneId, topIdx } | { kind:'zoneTask', zoneId, zIdx } | { kind:'zoneDrop', zoneId }
+      const [dragSrc,  setDragSrc]  = useState(null);
+      const [dragOver, setDragOver] = useState(null);
+      const clearDrag = () => { setDragSrc(null); setDragOver(null); };
+      // Zone inline rename
+      const [editingZoneId,   setEditingZoneId]   = useState(null);
+      const [editingZoneName, setEditingZoneName] = useState("");
 
-      const completedCount = items.filter(i => i.completed).length;
-      const totalCols = 2 + 3 + (showPriority ? 1 : 0) + 1 + (showAssignee ? 1 : 0) + (showTime ? 1 : 0) + (showLastDone ? 1 : 0) + 1;
+      const allItems = flattenList(list);
+      const completedCount = allItems.filter(i => i.completed).length;
+      const totalCols = 3 + 1 + (showHow?1:0) + (showSecondaryHow?1:0) + (showPriority?1:0) + (showFrequency?1:0) + (showAssignee?1:0) + (showTime?1:0) + (showSupplies?1:0) + (showLastDone?1:0) + 1;
+
+      // All zones in this list (for move-to-zone dropdown)
+      const zones = (list || []).filter(e => e.type === 'zone');
+
+      const commitZoneRename = () => {
+        if (editingZoneName.trim()) onRenameZone(editingZoneId, editingZoneName.trim());
+        setEditingZoneId(null);
+      };
 
       const ToggleTh = ({ show, onToggle, label, width, center }) => (
         <th className={`py-2 px-2 whitespace-nowrap ${center ? "text-center" : "text-left"}`} style={{ width }}>
@@ -419,88 +647,479 @@
             <span className={`w-2 h-2 rounded-full flex-none ${c.dot}`} />
             <h3 className={`font-bold text-sm uppercase tracking-widest mr-1 ${c.title}`}>{title}</h3>
             <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${c.count}`}>
-              {items.length} task{items.length !== 1 ? "s" : ""}
+              {allItems.length} task{allItems.length !== 1 ? "s" : ""}
             </span>
             <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${c.count}`}>
-              {formatTime(items.reduce((s, i) => s + parseMinutes(i.time), 0))}
+              {formatTime(allItems.reduce((s, i) => s + parseMinutes(i.time), 0))}
             </span>
-            {items.length > 0 && (
+            {allItems.length > 0 && (
               <span className="ml-auto text-xs font-semibold px-2.5 py-0.5 rounded-full bg-green-100 text-green-700">
-                {completedCount}/{items.length} done
+                {completedCount}/{allItems.length} done
               </span>
             )}
           </div>
 
           {/* Table */}
           <div className="overflow-x-auto">
-            <table className="w-full min-w-max text-xs">
+            <table className="w-full text-xs">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200">
                   <th className="no-print" style={{ width: "1.5rem" }} />
                   <th className="py-2 px-1 text-center no-print" style={{ width: "2rem" }}>
                     <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">✓</span>
                   </th>
+                  <th className="py-2 px-1 text-center no-print" style={{ width: "2rem" }}>
+                    <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">△</span>
+                  </th>
                   {[
-                    { label: "Task",          width: "20%" },
-                    { label: "Details",       width: "18%" },
-                    { label: "Secondary How", width: "16%" },
+                    { label: "Task",    width: "13%" },
+                    { label: "Details", width: "20%" },
                   ].map(({ label, width }) => (
                     <th key={label} className="text-left px-2 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap" style={{ width }}>
                       {label}
                     </th>
                   ))}
-                  <ToggleTh show={showPriority} onToggle={() => setShowPriority(v=>!v)} label="Priority" width="7rem" />
-                  <th className="text-left px-2 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap" style={{ width: "9%" }}>
-                    Frequency
-                  </th>
-                  <ToggleTh show={showAssignee} onToggle={() => setShowAssignee(v=>!v)} label="Who" width="2.5rem" center />
-                  <ToggleTh show={showTime}     onToggle={() => setShowTime(v=>!v)}     label="Time (min)" width="4rem" />
-                  <ToggleTh show={showLastDone} onToggle={() => setShowLastDone(v=>!v)} label="Last Done" width="6.5rem" />
+                  <ToggleTh show={showHow}          onToggle={() => setShowHow(v=>!v)}          label="How?"          width="20%" />
+                  <ToggleTh show={showSecondaryHow} onToggle={() => setShowSecondaryHow(v=>!v)} label="Secondary How"  width="20%" />
+                  <ToggleTh show={showPriority}     onToggle={() => setShowPriority(v=>!v)}     label="Priority"       width="7rem" />
+                  <ToggleTh show={showFrequency}    onToggle={() => setShowFrequency(v=>!v)}    label="Frequency"      width="9%" />
+                  <ToggleTh show={showAssignee}     onToggle={() => setShowAssignee(v=>!v)}     label="Who"            width="2.5rem" center />
+                  <ToggleTh show={showTime}         onToggle={() => setShowTime(v=>!v)}         label="Time (min)"     width="2.5rem" />
+                  <ToggleTh show={showSupplies}     onToggle={() => setShowSupplies(v=>!v)}     label="Supplies"       width="20%" />
+                  <ToggleTh show={showLastDone}     onToggle={() => setShowLastDone(v=>!v)}     label="Last Done"      width="6.5rem" />
                   <th className="no-print" style={{ width: "4rem" }} />
                 </tr>
               </thead>
               <tbody>
-                {items.length === 0 ? (
+                {allItems.length === 0 ? (
                   <tr>
                     <td colSpan={totalCols} className="text-center py-8 text-gray-300 text-xs italic">
                       No items yet — add one below
                     </td>
                   </tr>
-                ) : items.map((item, i) => (
-                  <ChecklistRow
-                    key={item.id}
-                    item={item}
-                    idx={i}
-                    total={items.length}
-                    employees={employees ?? []}
-                    showAssignee={showAssignee}
-                    showTime={showTime}
-                    showPriority={showPriority}
-                    showLastDone={showLastDone}
-                    onUpdate={(f, v) => onUpdate(item.id, f, v)}
-                    onDelete={() => onDelete(item.id)}
-                    onMoveUp={() => onMove(item.id, "up")}
-                    onMoveDown={() => onMove(item.id, "down")}
-                    isDragging={dragIdx === i}
-                    isDragOver={dragOverIdx === i && dragIdx !== i}
-                    onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; setDragIdx(i); }}
-                    onDragOver={(e) => { e.preventDefault(); setDragOverIdx(i); }}
-                    onDrop={(e) => { e.preventDefault(); if (dragIdx !== null && dragIdx !== i) onReorder(dragIdx, i); setDragIdx(null); setDragOverIdx(null); }}
-                    onDragEnd={() => { setDragIdx(null); setDragOverIdx(null); }}
-                  />
-                ))}
+                ) : (list || []).map((entry, topIdx) => {
+                  if (entry.type === 'zone') {
+                    const zoneItems = entry.items || [];
+                    return (
+                      <React.Fragment key={entry.id}>
+                        {/* ── Zone header row ── */}
+                        <tr
+                          draggable
+                          onDragStart={e => { e.dataTransfer.effectAllowed = "move"; setDragSrc({ kind: 'topZone', topIdx }); }}
+                          onDragOver={e => { e.preventDefault(); setDragOver({ kind: 'zoneHeader', zoneId: entry.id, topIdx }); }}
+                          onDrop={e => {
+                            e.preventDefault();
+                            if (dragSrc?.kind === 'topZone') {
+                              if (dragSrc.topIdx !== topIdx) onReorderTopLevel(dragSrc.topIdx, topIdx);
+                            } else if (dragSrc?.kind === 'topTask') {
+                              onMoveTaskCross(dragSrc.id, entry.id);
+                            } else if (dragSrc?.kind === 'zoneTask' && dragSrc.zoneId !== entry.id) {
+                              onMoveTaskCross(dragSrc.id, entry.id);
+                            }
+                            clearDrag();
+                          }}
+                          onDragEnd={clearDrag}
+                          className={`border-b border-gray-200 group/zone transition-all ${
+                            dragSrc?.kind === 'topZone' && dragSrc.topIdx === topIdx ? "opacity-40 bg-slate-50" :
+                            dragOver?.kind === 'zoneHeader' && dragOver.zoneId === entry.id && dragSrc?.kind !== 'topZone' ? "ring-inset ring-2 ring-blue-400 bg-blue-50/40" :
+                            dragOver?.kind === 'zoneHeader' && dragOver.zoneId === entry.id ? "ring-inset ring-2 ring-blue-300" :
+                            ""
+                          }`}
+                          style={{ backgroundColor: !(dragSrc?.kind === 'topZone' && dragSrc.topIdx === topIdx) ? '#f8fafc' : undefined }}
+                        >
+                          <td className="px-1 py-1 align-middle no-print" style={{ width: "1.5rem" }}>
+                            <div className="flex justify-center cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 select-none" title="Drag to reorder zone">
+                              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 16 16">
+                                <circle cx="5" cy="4" r="1.3"/><circle cx="11" cy="4" r="1.3"/>
+                                <circle cx="5" cy="8" r="1.3"/><circle cx="11" cy="8" r="1.3"/>
+                                <circle cx="5" cy="12" r="1.3"/><circle cx="11" cy="12" r="1.3"/>
+                              </svg>
+                            </div>
+                          </td>
+                          <td colSpan={totalCols - 1} className="px-2 py-1.5 align-middle">
+                            <div className="flex items-center gap-2">
+                              {/* Collapse toggle */}
+                              <button
+                                onClick={() => onToggleZone(entry.id)}
+                                className="text-gray-400 hover:text-gray-700 flex-none transition-colors"
+                                title={entry.collapsed ? "Expand zone" : "Collapse zone"}
+                              >
+                                <svg className={`w-3.5 h-3.5 transition-transform ${entry.collapsed ? "-rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7"/>
+                                </svg>
+                              </button>
+                              {/* Zone name */}
+                              {editingZoneId === entry.id ? (
+                                <input
+                                  autoFocus
+                                  value={editingZoneName}
+                                  onChange={e => setEditingZoneName(e.target.value)}
+                                  onBlur={commitZoneRename}
+                                  onKeyDown={e => { if (e.key === "Enter") commitZoneRename(); if (e.key === "Escape") setEditingZoneId(null); }}
+                                  className="text-xs font-bold border border-blue-300 rounded-lg px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white min-w-24"
+                                />
+                              ) : (
+                                <button
+                                  onClick={() => { setEditingZoneId(entry.id); setEditingZoneName(entry.name); }}
+                                  className="text-xs font-bold text-gray-600 hover:text-blue-600 uppercase tracking-wide"
+                                  title="Click to rename zone"
+                                >
+                                  {entry.name}
+                                </button>
+                              )}
+                              <span className="text-xs text-gray-400">{zoneItems.length} task{zoneItems.length !== 1 ? "s" : ""}</span>
+                              <button
+                                onClick={() => onAddItemToZone(entry.id)}
+                                className="text-xs text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded px-1.5 py-0.5 transition-colors"
+                                title="Add task to zone"
+                              >+ task</button>
+                              <button
+                                onClick={() => requestConfirm(`Delete zone "${entry.name}"? Tasks inside will return to the list.`, () => onDeleteZone(entry.id))}
+                                className="ml-auto text-gray-300 hover:text-red-500 hover:bg-red-50 rounded p-0.5 transition-colors opacity-0 group-hover/zone:opacity-100 text-xs"
+                                title="Delete zone"
+                              >✕</button>
+                            </div>
+                          </td>
+                        </tr>
+                        {/* ── Zone items ── */}
+                        {!entry.collapsed && zoneItems.map((item, zIdx) => (
+                          <ChecklistRow
+                            key={item.id}
+                            item={item}
+                            idx={zIdx}
+                            total={zoneItems.length}
+                            employees={employees ?? []}
+                            showHow={showHow}
+                            showSecondaryHow={showSecondaryHow}
+                            showFrequency={showFrequency}
+                            showAssignee={showAssignee}
+                            showTime={showTime}
+                            showSupplies={showSupplies}
+                            showPriority={showPriority}
+                            showLastDone={showLastDone}
+                            isInZone={true}
+                            zones={zones}
+                            onUpdate={(f, v) => onUpdate(item.id, f, v)}
+                            onDelete={() => onDelete(item.id)}
+                            onMoveUp={() => onMove(item.id, "up")}
+                            onMoveDown={() => onMove(item.id, "down")}
+                            onMoveToZone={targetZoneId => onMoveTaskToZone(item.id, targetZoneId)}
+                            listKey={listKey}
+                            onMoveToList={onMoveToList ? targetKey => onMoveToList(item.id, targetKey) : undefined}
+                            isDragging={dragSrc?.kind === 'zoneTask' && dragSrc.zoneId === entry.id && dragSrc.zIdx === zIdx}
+                            isDragOver={dragOver?.kind === 'zoneTask' && dragOver.zoneId === entry.id && dragOver.zIdx === zIdx && !(dragSrc?.kind === 'zoneTask' && dragSrc.zoneId === entry.id && dragSrc.zIdx === zIdx)}
+                            onDragStart={e => { e.stopPropagation(); e.dataTransfer.effectAllowed = "move"; setDragSrc({ kind: 'zoneTask', zoneId: entry.id, zIdx, id: item.id }); }}
+                            onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDragOver({ kind: 'zoneTask', zoneId: entry.id, zIdx }); }}
+                            onDrop={e => {
+                              e.preventDefault(); e.stopPropagation();
+                              if (!dragSrc) return;
+                              if (dragSrc.kind === 'zoneTask') {
+                                if (dragSrc.zoneId === entry.id) {
+                                  if (dragSrc.zIdx !== zIdx) onReorderInZone(entry.id, dragSrc.zIdx, zIdx);
+                                } else {
+                                  onMoveTaskCross(dragSrc.id, entry.id, zIdx);
+                                }
+                              } else if (dragSrc.kind === 'topTask') {
+                                onMoveTaskCross(dragSrc.id, entry.id, zIdx);
+                              }
+                              clearDrag();
+                            }}
+                            onDragEnd={clearDrag}
+                          />
+                        ))}
+                        {/* Empty zone placeholder / drop target */}
+                        {!entry.collapsed && zoneItems.length === 0 && (
+                          <tr
+                            className={`border-b border-gray-100 transition-colors ${dragOver?.kind === 'zoneDrop' && dragOver.zoneId === entry.id ? 'bg-blue-50' : ''}`}
+                            onDragOver={e => { e.preventDefault(); setDragOver({ kind: 'zoneDrop', zoneId: entry.id }); }}
+                            onDrop={e => {
+                              e.preventDefault();
+                              if (dragSrc?.kind === 'topTask') onMoveTaskCross(dragSrc.id, entry.id);
+                              else if (dragSrc?.kind === 'zoneTask' && dragSrc.zoneId !== entry.id) onMoveTaskCross(dragSrc.id, entry.id);
+                              clearDrag();
+                            }}
+                          >
+                            <td colSpan={totalCols} className="py-2.5 text-center text-xs italic" style={{ color: dragOver?.kind === 'zoneDrop' && dragOver.zoneId === entry.id ? '#3b82f6' : '#d1d5db' }}>
+                              {dragOver?.kind === 'zoneDrop' && dragOver.zoneId === entry.id ? '↓ Drop task here' : 'No tasks in this zone yet'}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  }
+                  // ── Top-level task ──
+                  return (
+                    <ChecklistRow
+                      key={entry.id}
+                      item={entry}
+                      idx={topIdx}
+                      total={list.length}
+                      employees={employees ?? []}
+                      showHow={showHow}
+                      showSecondaryHow={showSecondaryHow}
+                      showFrequency={showFrequency}
+                      showAssignee={showAssignee}
+                      showTime={showTime}
+                      showSupplies={showSupplies}
+                      showPriority={showPriority}
+                      showLastDone={showLastDone}
+                      isInZone={false}
+                      zones={zones}
+                      onUpdate={(f, v) => onUpdate(entry.id, f, v)}
+                      onDelete={() => onDelete(entry.id)}
+                      onMoveUp={() => onMove(entry.id, "up")}
+                      onMoveDown={() => onMove(entry.id, "down")}
+                      onMoveToZone={targetZoneId => onMoveTaskToZone(entry.id, targetZoneId)}
+                      listKey={listKey}
+                      onMoveToList={onMoveToList ? targetKey => onMoveToList(entry.id, targetKey) : undefined}
+                      isDragging={dragSrc?.kind === 'topTask' && dragSrc.topIdx === topIdx}
+                      isDragOver={dragOver?.kind === 'topTask' && dragOver.topIdx === topIdx && !(dragSrc?.kind === 'topTask' && dragSrc.topIdx === topIdx)}
+                      onDragStart={e => { e.dataTransfer.effectAllowed = "move"; setDragSrc({ kind: 'topTask', topIdx, id: entry.id }); }}
+                      onDragOver={e => { e.preventDefault(); setDragOver({ kind: 'topTask', topIdx }); }}
+                      onDrop={e => {
+                        e.preventDefault();
+                        if (!dragSrc) return;
+                        if ((dragSrc.kind === 'topTask' || dragSrc.kind === 'topZone') && dragSrc.topIdx !== topIdx) {
+                          onReorderTopLevel(dragSrc.topIdx, topIdx);
+                        } else if (dragSrc.kind === 'zoneTask') {
+                          onMoveTaskCross(dragSrc.id, null, topIdx);
+                        }
+                        clearDrag();
+                      }}
+                      onDragEnd={clearDrag}
+                    />
+                  );
+                })}
               </tbody>
             </table>
           </div>
 
-          {/* Add row */}
-          <div className="p-2 border-t border-gray-100 no-print">
+          {/* Add row + Add Zone */}
+          <div className="p-2 border-t border-gray-100 no-print flex gap-2">
             <button
               onClick={onAdd}
-              className={`w-full py-1.5 text-xs rounded-lg border border-dashed transition-colors ${c.add}`}
+              className={`flex-1 py-1.5 text-xs rounded-lg border border-dashed transition-colors ${c.add}`}
             >
-              + Add Item
+              + Add Task
             </button>
+            <button
+              onClick={onAddZone}
+              className="py-1.5 px-3 text-xs rounded-lg border border-dashed border-gray-300 text-gray-500 hover:bg-gray-50 hover:border-gray-400 transition-colors"
+              title="Add a zone to group tasks"
+            >
+              + Add Zone
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Custom Print Modal ───────────────────────────────────────────────────────
+    function PrintModal({ loc, locData, onClose }) {
+      const allRoomIds   = locData.rooms.map(r => r.id);
+      const allEmployees = (locData.employees || []).map(e => e.name);
+
+      const [employee, setEmployee]   = useState("All");
+      const [rooms,    setRooms]      = useState(() => new Set(allRoomIds));
+      const [lists,    setLists]      = useState(() => new Set(["restocking", "cleaning", "monthly"]));
+
+      const toggleRoom = id  => setRooms(p  => { const n = new Set(p); n.has(id)  ? n.delete(id)  : n.add(id);  return n; });
+      const toggleList = key => setLists(p  => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n; });
+
+      // Live preview count
+      const preview = React.useMemo(() => {
+        let tasks = 0, roomCount = 0;
+        locData.rooms.forEach(room => {
+          if (!rooms.has(room.id)) return;
+          let hit = false;
+          LIST_META.forEach(({ key }) => {
+            if (!lists.has(key)) return;
+            flattenList(room[key] || []).forEach(item => {
+              if (employee === "All" || item.assignee === employee) { tasks++; hit = true; }
+            });
+          });
+          if (hit) roomCount++;
+        });
+        return { tasks, roomCount };
+      }, [locData, rooms, lists, employee]);
+
+      const doPrint = () => {
+        const esc   = s => (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/\n/g,"<br>");
+        const date  = new Date().toLocaleDateString("en-US", { year:"numeric", month:"long", day:"numeric" });
+        const who   = employee === "All" ? "All Staff" : employee;
+        const color = { restocking:"#f59e0b", cleaning:"#10b981", monthly:"#8b5cf6" };
+
+        const makeRow = (task, indent) => `
+          <tr${indent ? ' class="zindent"' : ''}>
+            <td class="cb"><span class="chk"></span></td>
+            <td class="task">${esc(task.task)}</td>
+            <td>${esc(task.details)}</td>
+            <td>${esc(task.how)}</td>
+            <td>${esc(task.secondaryHow)}</td>
+            <td class="narrow">${esc(task.time)}</td>
+            <td>${esc(task.supplies)}</td>
+          </tr>`;
+
+        let sections = "";
+        locData.rooms.forEach(room => {
+          if (!rooms.has(room.id)) return;
+          let roomHtml = "";
+          LIST_META.forEach(({ key, label }) => {
+            if (!lists.has(key)) return;
+            let bodyHtml = ""; let taskCount = 0;
+            (room[key] || []).forEach(entry => {
+              if (entry.type === "zone") {
+                let zRows = ""; let zCount = 0;
+                entry.items.forEach(t => {
+                  if (employee !== "All" && t.assignee !== employee) return;
+                  zRows += makeRow(t, true); zCount++; taskCount++;
+                });
+                if (zCount > 0) bodyHtml += `<tr class="zone-hdr"><td colspan="5">▸ ${esc(entry.name)}</td></tr>${zRows}`;
+              } else {
+                if (employee !== "All" && entry.assignee !== employee) return;
+                bodyHtml += makeRow(entry, false); taskCount++;
+              }
+            });
+            if (taskCount === 0) return;
+            roomHtml += `
+              <div class="lsec">
+                <div class="lhdr" style="border-left:4px solid ${color[key]}; color:${color[key]}">${label}</div>
+                <table>
+                  <thead><tr><th class="cb"></th><th class="task">Task</th><th>Details</th><th>How?</th><th>Secondary How</th><th class="narrow">Time</th><th>Supplies</th></tr></thead>
+                  <tbody>${bodyHtml}</tbody>
+                </table>
+              </div>`;
+          });
+          if (!roomHtml) return;
+          sections += `<div class="rsec"><div class="rhdr">${esc(room.name)}</div>${roomHtml}</div>`;
+        });
+
+        if (!sections) { alert("No tasks match your selection."); return; }
+
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>${esc(loc)} · ${who} · ${date}</title>
+<style>
+  body{font-family:Arial,sans-serif;font-size:9.5pt;margin:0;background:#fff}
+  @page{size:portrait;margin:1.2cm}
+  .phead{border-bottom:2.5px solid #1e293b;padding-bottom:8pt;margin-bottom:16pt}
+  .phead h1{font-size:15pt;font-weight:bold;margin:0 0 2pt;color:#0f172a}
+  .phead .sub{font-size:9pt;color:#64748b;margin:0}
+  .rsec{margin-bottom:20pt;break-inside:avoid-page}
+  .rhdr{font-size:12pt;font-weight:bold;color:#1e293b;padding:5pt 0 4pt;border-bottom:1.5px solid #cbd5e1;margin-bottom:8pt}
+  .lsec{margin-bottom:10pt}
+  .lhdr{padding:3pt 8pt;margin-bottom:4pt;background:#f8fafc;font-size:9pt;font-weight:bold}
+  table{width:100%;border-collapse:collapse;margin-bottom:4pt}
+  th{background:#f1f5f9;font-weight:bold;text-align:left;padding:4pt 6pt;font-size:8pt;text-transform:uppercase;letter-spacing:.04em;border:1px solid #cbd5e1}
+  td{padding:5pt 6pt;border:1px solid #e2e8f0;font-size:9pt;vertical-align:top}
+  tr:nth-child(even) td{background:#f8fafc}
+  th.cb,td.cb{width:18pt;text-align:center}
+  th.narrow,td.narrow{width:38pt}
+  th.task,td.task{width:22%}
+  .chk{display:inline-block;width:12pt;height:12pt;border:1.5px solid #94a3b8;border-radius:3pt}
+  .zone-hdr td{background:#f1f5f9!important;font-size:8.5pt;color:#475569;font-weight:bold;padding:3pt 6pt}
+  .zindent td.task{padding-left:18pt}
+</style></head><body>
+<div class="phead"><h1>${esc(loc)}</h1><p class="sub">${who} &nbsp;·&nbsp; ${date}</p></div>
+${sections}
+<script>window.onload=()=>{window.print()}<\/script>
+</body></html>`;
+
+        const w = window.open("","_blank");
+        if (w) { w.document.write(html); w.document.close(); }
+      };
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 flex flex-col max-h-[90vh] overflow-hidden">
+
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between flex-none">
+              <div>
+                <h2 className="text-base font-bold text-gray-800 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+                  </svg>
+                  Custom Print
+                </h2>
+                <p className="text-xs text-gray-400 mt-0.5">{loc}</p>
+              </div>
+              <button onClick={onClose} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 text-lg leading-none">✕</button>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+
+              {/* Employee */}
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Employee</label>
+                <select value={employee} onChange={e => setEmployee(e.target.value)}
+                  className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white">
+                  <option value="All">All Staff</option>
+                  {allEmployees.map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+                {allEmployees.length === 0 && (
+                  <p className="text-xs text-gray-400 mt-1 italic">Add employees in Location Settings to filter by person.</p>
+                )}
+              </div>
+
+              {/* List types */}
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">List Types</label>
+                <div className="flex gap-2">
+                  {LIST_META.map(({ key, label, abbr, light, text, border }) => (
+                    <button key={key} onClick={() => toggleList(key)}
+                      className={`flex-1 py-2.5 rounded-xl border-2 text-xs font-bold transition-all ${
+                        lists.has(key) ? `${light} ${text} ${border}` : "bg-gray-50 text-gray-300 border-gray-200"
+                      }`}>
+                      <span className="block text-sm">{abbr}</span>
+                      <span className="block font-medium mt-0.5">{label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Rooms */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Rooms & Areas</label>
+                  <div className="flex gap-3">
+                    <button onClick={() => setRooms(new Set(allRoomIds))} className="text-xs text-blue-500 hover:underline font-medium">All</button>
+                    <button onClick={() => setRooms(new Set())} className="text-xs text-gray-400 hover:underline">None</button>
+                  </div>
+                </div>
+                <div className="border border-gray-200 rounded-xl overflow-hidden max-h-52 overflow-y-auto">
+                  {locData.rooms.map((room, i) => (
+                    <label key={room.id}
+                      className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-blue-50 transition-colors ${i > 0 ? "border-t border-gray-100" : ""}`}>
+                      <input type="checkbox" checked={rooms.has(room.id)} onChange={() => toggleRoom(room.id)}
+                        className="w-4 h-4 rounded accent-blue-600 flex-none" />
+                      <span className="text-sm text-gray-700">{room.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between flex-none bg-gray-50/60">
+              <p className="text-xs text-gray-500">
+                {preview.tasks > 0 ? (
+                  <><span className="font-bold text-gray-700">{preview.tasks}</span> tasks across <span className="font-bold text-gray-700">{preview.roomCount}</span> room{preview.roomCount !== 1 ? "s" : ""}</>
+                ) : (
+                  <span className="text-amber-600 font-medium">No tasks match this selection</span>
+                )}
+              </p>
+              <div className="flex gap-2">
+                <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-200 rounded-xl transition-colors">Cancel</button>
+                <button onClick={doPrint} disabled={preview.tasks === 0}
+                  className="px-5 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl transition-colors flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+                  </svg>
+                  Print
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       );
@@ -510,8 +1129,8 @@
     function openPrintWindow(location, room, view) {
       const LABEL = { restocking: "Restocking Checklist", cleaning: "Cleaning Checklist", monthly: "Monthly Checklist" };
       const LIST  = { restocking: room.restocking, cleaning: room.cleaning, monthly: room.monthly };
-      const fields = ["task", "details", "secondaryHow", "frequency", "assignee", "time"];
-      const cols   = ["Task", "Details", "Secondary How", "Frequency", "Assignee", "Time"];
+      const fields = ["task", "details", "how", "secondaryHow", "frequency", "assignee", "time", "supplies"];
+      const cols   = ["Task", "Details", "How?", "Secondary How", "Frequency", "Assignee", "Time", "Supplies"];
       const items  = LIST[view] ?? [];
       const date   = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 
@@ -554,6 +1173,13 @@
       if (w) { w.document.write(html); w.document.close(); }
     }
 
+    // ─── List metadata (shared across components) ────────────────────────────────
+    const LIST_META = [
+      { key: "restocking", label: "Restocking", bar: "bg-amber-500",   light: "bg-amber-50",   border: "border-amber-200",   text: "text-amber-700",   pill: "bg-amber-100 text-amber-700",   abbr: "R", stroke: "#f59e0b" },
+      { key: "cleaning",   label: "Cleaning",   bar: "bg-emerald-500", light: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-700", pill: "bg-emerald-100 text-emerald-700", abbr: "C", stroke: "#10b981" },
+      { key: "monthly",    label: "Monthly",    bar: "bg-violet-500",  light: "bg-violet-50",  border: "border-violet-200",  text: "text-violet-700",  pill: "bg-violet-100 text-violet-700",  abbr: "M", stroke: "#8b5cf6" },
+    ];
+
     // ─── LocationDashboard ───────────────────────────────────────────────────────
     function LocationDashboard({ loc, locData, locColor, onSelectRoom }) {
       const rooms = locData.rooms;
@@ -561,9 +1187,9 @@
 
       // Flatten all items per list type across every room
       const byType = {
-        restocking: rooms.flatMap(r => r.restocking),
-        cleaning:   rooms.flatMap(r => r.cleaning),
-        monthly:    rooms.flatMap(r => r.monthly),
+        restocking: rooms.flatMap(r => flattenList(r.restocking)),
+        cleaning:   rooms.flatMap(r => flattenList(r.cleaning)),
+        monthly:    rooms.flatMap(r => flattenList(r.monthly)),
       };
       const allItems = [...byType.restocking, ...byType.cleaning, ...byType.monthly];
       const totalTasks = allItems.length;
@@ -610,27 +1236,124 @@
       // Build list in canonical order, always including all six options
       const frequencies = FREQUENCY_OPTIONS.map(opt => [opt, freqMap[opt] || 0]);
 
-      const LIST_META = [
-        { key: "restocking", label: "Restocking", bar: "bg-amber-500", light: "bg-amber-50", border: "border-amber-200", text: "text-amber-700", pill: "bg-amber-100 text-amber-700", abbr: "R" },
-        { key: "cleaning",   label: "Cleaning",   bar: "bg-emerald-500", light: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-700", pill: "bg-emerald-100 text-emerald-700", abbr: "C" },
-        { key: "monthly",    label: "Monthly",    bar: "bg-violet-500",  light: "bg-violet-50",  border: "border-violet-200",  text: "text-violet-700",  pill: "bg-violet-100 text-violet-700",  abbr: "M" },
-      ];
+      // LIST_META is defined at module level above
+
+      const [dashSearch, setDashSearch] = useState("");
+
+      const searchIndex = React.useMemo(() => rooms.flatMap(room =>
+        LIST_META.flatMap(({ key, label, pill }) =>
+          flattenList(room[key] || []).map(item => ({ ...item, roomName: room.name, roomId: room.id, category: label, categoryPill: pill }))
+        )
+      ), [rooms]);
+
+      const searchResults = React.useMemo(() => {
+        const q = dashSearch.trim().toLowerCase();
+        if (!q) return [];
+        return searchIndex.filter(item =>
+          [item.task, item.details, item.how, item.secondaryHow, item.roomName].some(f => (f||"").toLowerCase().includes(q))
+        );
+      }, [dashSearch, searchIndex]);
+
+      const Highlight = ({ text }) => {
+        const q = dashSearch.trim();
+        if (!q || !text) return <>{text || ""}</>;
+        const idx = text.toLowerCase().indexOf(q.toLowerCase());
+        if (idx === -1) return <>{text}</>;
+        return <>{text.slice(0, idx)}<mark className="bg-yellow-200 text-yellow-900 rounded-sm px-0.5 not-italic">{text.slice(idx, idx + q.length)}</mark>{text.slice(idx + q.length)}</>;
+      };
 
       return (
         <div className="p-6 overflow-auto h-full">
 
           {/* Page header */}
-          <div className="mb-6">
-            <div className="flex items-center gap-2 mb-1">
-              <span className={`w-2.5 h-2.5 rounded-full ${locColor.dot}`} />
-              <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{loc}</p>
+          <div className="mb-6 flex items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className={`w-2.5 h-2.5 rounded-full ${locColor.dot}`} />
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{loc}</p>
+              </div>
+              <h2 className="text-2xl font-bold text-gray-800">Dashboard</h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                {rooms.length} room{rooms.length !== 1 ? "s" : ""} &nbsp;·&nbsp; {totalTasks} total task{totalTasks !== 1 ? "s" : ""} &nbsp;·&nbsp; {employees.length} employee{employees.length !== 1 ? "s" : ""}
+              </p>
             </div>
-            <h2 className="text-2xl font-bold text-gray-800">Dashboard</h2>
-            <p className="text-xs text-gray-400 mt-0.5">
-              {rooms.length} room{rooms.length !== 1 ? "s" : ""} &nbsp;·&nbsp; {totalTasks} total task{totalTasks !== 1 ? "s" : ""} &nbsp;·&nbsp; {employees.length} employee{employees.length !== 1 ? "s" : ""}
-            </p>
+            <div className="relative w-72 flex-none mt-1">
+              <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+              </svg>
+              <input
+                value={dashSearch}
+                onChange={e => setDashSearch(e.target.value)}
+                placeholder="Search all tasks in this location…"
+                className={`w-full text-xs border rounded-xl pl-9 pr-8 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition-all placeholder-gray-300 ${dashSearch ? "border-blue-300 bg-white shadow-sm" : "border-gray-200 bg-gray-50 hover:bg-white hover:border-gray-300"}`}
+              />
+              {dashSearch && (
+                <button onClick={() => setDashSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
+              )}
+            </div>
           </div>
 
+          {dashSearch.trim() ? (
+            /* ── Search results ── */
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm font-semibold text-gray-600">
+                  <span className="text-lg font-extrabold text-gray-800 mr-1">{searchResults.length}</span>
+                  result{searchResults.length !== 1 ? "s" : ""}
+                  {searchResults.length > 0 && <> for "<span className="text-blue-600">{dashSearch}</span>"</>}
+                </p>
+                <button onClick={() => setDashSearch("")} className="text-xs text-gray-400 hover:text-gray-600 font-medium px-2 py-1 rounded-lg hover:bg-gray-100 transition-colors">
+                  Clear search
+                </button>
+              </div>
+              {searchResults.length === 0 ? (
+                <div className="text-center py-16">
+                  <div className="text-4xl mb-3 opacity-20">🔍</div>
+                  <p className="text-sm text-gray-500 font-medium">No tasks match "{dashSearch}"</p>
+                  <p className="text-xs text-gray-300 mt-1">Try different keywords</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {searchResults.map(item => (
+                    <button
+                      key={item.id}
+                      onClick={() => onSelectRoom(item.roomId)}
+                      className="w-full text-left bg-white rounded-xl border border-gray-200 shadow-sm p-3.5 hover:border-blue-300 hover:shadow-md transition-all group"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${item.categoryPill}`}>{item.category}</span>
+                            <span className="text-xs text-gray-400 font-semibold">{item.roomName}</span>
+                          </div>
+                          <p className="text-sm font-semibold text-gray-800 group-hover:text-blue-700 transition-colors">
+                            <Highlight text={item.task} />
+                          </p>
+                          {item.details && (
+                            <p className="text-xs text-gray-500 mt-0.5 truncate"><Highlight text={item.details} /></p>
+                          )}
+                          {!item.details && item.secondaryHow && (
+                            <p className="text-xs text-gray-500 mt-0.5 truncate"><Highlight text={item.secondaryHow} /></p>
+                          )}
+                          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                            {item.frequency && <span className="text-xs text-gray-400">{item.frequency}</span>}
+                            {item.priority  && <span className={`text-xs font-semibold px-1.5 py-0 rounded-full border ${PRIORITY_STYLES[item.priority]?.pill}`}>{item.priority}</span>}
+                            {item.assignee  && <span className="text-xs text-gray-500">· {item.assignee}</span>}
+                            {item.completed && <span className="text-xs text-green-600 font-semibold">✓ Done</span>}
+                            {item.notNeeded && <span className="text-xs text-gray-500 font-semibold">△ Not needed</span>}
+                            {item.prevIncomplete && <span className="text-xs font-bold px-1.5 rounded bg-red-100 text-red-500">PRV INC</span>}
+                          </div>
+                        </div>
+                        <svg className="w-4 h-4 text-gray-300 group-hover:text-blue-400 flex-none mt-0.5 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/>
+                        </svg>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (<>
           {/* ── Checklist summary cards ── */}
           <div className="grid grid-cols-3 gap-4 mb-5">
             {LIST_META.map(({ key, label, bar, text }) => {
@@ -779,8 +1502,9 @@
               <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Rooms & Areas</h3>
               <div className="grid grid-cols-3 gap-3">
                 {rooms.map(room => {
-                  const totalRoom = room.restocking.length + room.cleaning.length + room.monthly.length;
-                  const roomMins  = [...room.restocking, ...room.cleaning, ...room.monthly].reduce((s, i) => s + parseMinutes(i.time), 0);
+                  const flatR = flattenList(room.restocking), flatC = flattenList(room.cleaning), flatM = flattenList(room.monthly);
+                  const totalRoom = flatR.length + flatC.length + flatM.length;
+                  const roomMins  = [...flatR, ...flatC, ...flatM].reduce((s, i) => s + parseMinutes(i.time), 0);
                   return (
                     <button
                       key={room.id}
@@ -794,7 +1518,7 @@
                       <div className="flex gap-1.5">
                         {LIST_META.map(({ key, abbr, pill }) => (
                           <span key={key} className={`text-xs px-2 py-0.5 rounded-full font-semibold ${pill}`}>
-                            {room[key].length} {abbr}
+                            {flattenList(room[key]).length} {abbr}
                           </span>
                         ))}
                       </div>
@@ -814,6 +1538,7 @@
               <p className="text-xs text-gray-300 mt-1">Use the sidebar to add your first room or area</p>
             </div>
           )}
+          </>)}
         </div>
       );
     }
@@ -980,6 +1705,17 @@
 
     // ─── Persistence helpers ──────────────────────────────────────────────────────
     const STORAGE_KEY = "housemanager_data";
+    const RESET_KEY   = "housemanager_last_reset";
+    const LOG_KEY     = "housemanager_weekly_logs";
+
+    const getThisMondayMidnight = () => {
+      const now = new Date();
+      const daysSinceMonday = now.getDay() === 0 ? 6 : now.getDay() - 1;
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - daysSinceMonday);
+      monday.setHours(0, 0, 0, 0);
+      return monday.getTime();
+    };
 
     const loadData = () => {
       try {
@@ -990,7 +1726,7 @@
     };
 
     const saveData = (data) => {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (e) {}
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); return true; } catch (e) { return false; }
     };
 
     // ─── Export / Import ─────────────────────────────────────────────────────────
@@ -1006,19 +1742,19 @@
 
     // Shared CSV builder — used by Export CSV button AND Google Sheets auto-sync
     const buildCSV = (data) => {
-      const headers = ["Location","Room","Category","Task","Details","How-To","Frequency","Priority","Assignee","Time Est.","Completed","Last Done"];
+      const headers = ["Location","Room","Category","Task","Details","How?","Secondary How","Frequency","Priority","Assignee","Time Est.","Supplies","Completed","Last Done"];
       const rows = [headers];
       LOCATIONS.forEach(loc => {
         const ld = data[loc];
         if (!ld) return;
         ld.rooms.forEach(room => {
           [["restocking","Restocking"],["cleaning","Cleaning"],["monthly","Monthly"]].forEach(([key, label]) => {
-            (room[key] || []).forEach(item => {
+            flattenList(room[key] || []).forEach(item => {
               rows.push([
                 loc, room.name, label,
-                item.task || "", item.details || "", item.secondaryHow || "",
+                item.task || "", item.details || "", item.how || "", item.secondaryHow || "",
                 item.frequency || "", item.priority || "", item.assignee || "",
-                item.time || "", item.completed ? "Yes" : "No", item.lastCompleted || ""
+                item.time || "", item.supplies || "", item.completed ? "Yes" : "No", item.lastCompleted || ""
               ]);
             });
           });
@@ -1036,6 +1772,95 @@
     const exportJSON = (data) => {
       const date = new Date().toISOString().slice(0,10);
       triggerDownload(new Blob([JSON.stringify(data, null, 2)], { type:"application/json" }), `house-manager-backup-${date}.json`);
+    };
+
+    // ─── CSV Import Parser ────────────────────────────────────────────────────────
+    const parseCSVRows = (text) => {
+      const parseRow = (line) => {
+        const cells = []; let cur = '', inQ = false;
+        for (let i = 0; i < line.length; i++) {
+          const c = line[i];
+          if (c === '"') { if (inQ && line[i+1] === '"') { cur += '"'; i++; } else inQ = !inQ; }
+          else if (c === ',' && !inQ) { cells.push(cur.trim()); cur = ''; }
+          else cur += c;
+        }
+        cells.push(cur.trim());
+        return cells;
+      };
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) return [];
+      const headers = parseRow(lines[0]).map(h => h.replace(/^"|"$/g, '').toLowerCase().trim());
+      return lines.slice(1).filter(l => l.trim()).map(line => {
+        const cells = parseRow(line).map(c => c.replace(/^"|"$/g, ''));
+        const obj = {};
+        headers.forEach((h, i) => { obj[h] = cells[i] ?? ''; });
+        return obj;
+      });
+    };
+
+    const getField = (row, ...candidates) => {
+      for (const c of candidates) {
+        const val = row[c.toLowerCase()];
+        if (val !== undefined && val !== '') return val;
+      }
+      return '';
+    };
+
+    const parseImportCSV = (text, currentLoc) => {
+      const rows = parseCSVRows(text);
+      if (rows.length === 0) return { rooms: [], errors: ['No data found in file'], warnings: [], skipped: 0 };
+
+      const errors = [], warnings = [];
+      let skipped = 0;
+      const roomMap = {};
+
+      rows.forEach((row, i) => {
+        const rowNum = i + 2;
+        const rowLoc = getField(row, 'location');
+        if (rowLoc && rowLoc.toLowerCase() !== currentLoc.toLowerCase()) { skipped++; return; }
+
+        const roomName = getField(row, 'room', 'room/area', 'area', 'room name', 'roomarea').trim();
+        if (!roomName) { warnings.push(`Row ${rowNum}: missing Room — skipped`); return; }
+
+        const catRaw = getField(row, 'category', 'type', 'list', 'list type').toLowerCase().trim();
+        let category = 'restocking';
+        if (catRaw.includes('clean')) category = 'cleaning';
+        else if (catRaw.includes('month')) category = 'monthly';
+        else if (!catRaw || catRaw.includes('restock')) category = 'restocking';
+        else { warnings.push(`Row ${rowNum}: unknown category "${catRaw}" — defaulted to Restocking`); }
+
+        const task = getField(row, 'task', 'task name', 'name', 'item').trim();
+        if (!task) { warnings.push(`Row ${rowNum}: missing Task — skipped`); return; }
+
+        const freqRaw = getField(row, 'frequency', 'freq').trim();
+        const FREQ_NORM = { 'weekly':'Weekly','bi-weekly':'Bi-Weekly','biweekly':'Bi-Weekly','bi weekly':'Bi-Weekly','monthly':'Monthly','quarterly':'Quarterly','yearly':'Yearly','as needed':'As Needed','as-needed':'As Needed','asneeded':'As Needed' };
+        const frequency = FREQ_NORM[freqRaw.toLowerCase()] || freqRaw;
+
+        const priRaw = getField(row, 'priority', 'pri').trim();
+        const PRI_NORM = { 'high':'High','medium':'Medium','med':'Medium','low':'Low','h':'High','m':'Medium','l':'Low' };
+        const priority = PRI_NORM[priRaw.toLowerCase()] || priRaw;
+
+        const item = {
+          id: uid(),
+          task,
+          details:      getField(row, 'details', 'detail', 'description', 'desc').trim(),
+          how:          getField(row, 'how?', 'how', 'how-to', 'howto', 'how to', 'primary how').trim(),
+          secondaryHow: getField(row, 'secondary how?', 'secondary how', 'secondary', 'notes', 'note').trim(),
+          frequency,
+          priority,
+          assignee:     getField(row, 'assignee', 'assigned to', 'who', 'assign').trim(),
+          time:         getField(row, 'time est.', 'time est', 'time', 'duration', 'time estimate').trim(),
+          supplies:      getField(row, 'supplies', 'supply', 'materials', 'items needed').trim(),
+          completed: false,
+          lastCompleted: getField(row, 'last done', 'last completed', 'lastcompleted', 'lastdone', 'last done date').trim(),
+        };
+
+        const key = roomName.toLowerCase();
+        if (!roomMap[key]) roomMap[key] = { name: roomName, restocking: [], cleaning: [], monthly: [] };
+        roomMap[key][category].push(item);
+      });
+
+      return { rooms: Object.values(roomMap), errors, warnings, skipped };
     };
 
     // ─── Google Sheets Sync ───────────────────────────────────────────────────────
@@ -1130,6 +1955,368 @@
       );
     }
 
+    // ─── ConfirmModal ────────────────────────────────────────────────────────────
+    function ConfirmModal({ message, onConfirm, onCancel }) {
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+             onClick={e => { if (e.target === e.currentTarget) onCancel(); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
+            <div className="px-5 py-5 flex items-start gap-3.5">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-none mt-0.5">
+                <svg className="w-5 h-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                </svg>
+              </div>
+              <div>
+                <p className="font-bold text-gray-800 text-sm mb-1">Confirm Delete</p>
+                <p className="text-xs text-gray-500 leading-relaxed">{message}</p>
+              </div>
+            </div>
+            <div className="px-5 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-end gap-2">
+              <button
+                onClick={onCancel}
+                className="px-4 py-2 text-xs font-medium bg-white border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-600 shadow-sm transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={onConfirm}
+                className="px-4 py-2 text-xs font-semibold bg-red-600 text-white rounded-xl hover:bg-red-700 shadow-sm transition-colors"
+              >
+                Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── FilterBar ───────────────────────────────────────────────────────────────
+    function FilterBar({ allItems, employees, text, priority, frequency, status, assignee, onText, onPriority, onFrequency, onStatus, onAssignee, onClear }) {
+      const hasFilters = text || priority !== "All" || frequency !== "All" || status !== "all" || assignee !== "All";
+
+      // Build assignee list from employees + any assignee values already in data
+      const assigneeOptions = React.useMemo(() => {
+        const names = new Set([
+          ...employees.map(e => e.name),
+          ...allItems.map(i => i.assignee).filter(Boolean),
+        ]);
+        return ["All", ...[...names].sort()];
+      }, [employees, allItems]);
+
+      const filteredCount = allItems.filter(item => {
+        if (text) {
+          const t = text.toLowerCase();
+          if (![item.task, item.details, item.how, item.secondaryHow].some(f => (f||"").toLowerCase().includes(t))) return false;
+        }
+        if (priority  !== "All" && item.priority  !== priority)  return false;
+        if (frequency !== "All" && item.frequency !== frequency) return false;
+        if (assignee  !== "All" && item.assignee  !== assignee)  return false;
+        if (status === "complete"   && !item.completed)                    return false;
+        if (status === "incomplete" && (item.completed || item.notNeeded)) return false;
+        if (status === "not-needed" && !item.notNeeded)                    return false;
+        if (status === "prv-inc"    && !item.prevIncomplete)               return false;
+        return true;
+      }).length;
+
+      const selClass = "text-xs border rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 cursor-pointer transition-colors " + (hasFilters ? "border-blue-200 text-gray-700 hover:border-blue-300" : "border-gray-200 text-gray-600 hover:border-gray-300");
+
+      return (
+        <div className={`no-print flex items-center gap-2 flex-wrap mb-4 px-3 py-2.5 rounded-xl border transition-colors ${hasFilters ? "bg-blue-50/40 border-blue-200" : "bg-gray-50 border-gray-200"}`}>
+
+          {/* Text search */}
+          <div className="relative flex-1 min-w-40">
+            <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+            <input
+              value={text}
+              onChange={e => onText(e.target.value)}
+              placeholder="Search tasks, details, notes…"
+              className={`w-full text-xs border rounded-lg pl-8 pr-7 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 placeholder-gray-300 transition-colors ${text ? "border-blue-300 text-gray-800" : "border-gray-200 text-gray-700"}`}
+            />
+            {text && (
+              <button onClick={() => onText("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-600 text-base leading-none">×</button>
+            )}
+          </div>
+
+          {/* Priority */}
+          <select value={priority} onChange={e => onPriority(e.target.value)} className={selClass}>
+            <option value="All">All Priorities</option>
+            {PRIORITY_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+
+          {/* Frequency */}
+          <select value={frequency} onChange={e => onFrequency(e.target.value)} className={selClass}>
+            <option value="All">All Frequencies</option>
+            {FREQUENCY_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+
+          {/* Status */}
+          <select value={status} onChange={e => onStatus(e.target.value)} className={selClass}>
+            <option value="all">All Statuses</option>
+            <option value="incomplete">Incomplete</option>
+            <option value="complete">Complete ✓</option>
+            <option value="not-needed">Not Needed △</option>
+            <option value="prv-inc">PRV INC</option>
+          </select>
+
+          {/* Assignee — only show if there are options */}
+          {assigneeOptions.length > 1 && (
+            <select value={assignee} onChange={e => onAssignee(e.target.value)} className={selClass}>
+              {assigneeOptions.map(a => <option key={a} value={a}>{a === "All" ? "All Assignees" : a}</option>)}
+            </select>
+          )}
+
+          {/* Active filter feedback */}
+          {hasFilters && (
+            <>
+              <span className="text-xs font-semibold text-blue-600 px-1 whitespace-nowrap">
+                {filteredCount} / {allItems.length} shown
+              </span>
+              <button
+                onClick={onClear}
+                className="text-xs font-medium text-gray-400 hover:text-red-500 px-2 py-1 rounded-lg hover:bg-red-50 transition-colors whitespace-nowrap"
+              >
+                Clear all
+              </button>
+            </>
+          )}
+        </div>
+      );
+    }
+
+    // ─── ImportModal ─────────────────────────────────────────────────────────────
+    function ImportModal({ loc, existingRooms, onImport, onClose }) {
+      const [step, setStep] = useState('upload');
+      const [parsed, setParsed] = useState(null);
+      const [mode, setMode] = useState('append');
+      const [dragging, setDragging] = useState(false);
+      const fileRef = React.useRef();
+
+      const processFile = (file) => {
+        if (!file) return;
+        if (!file.name.match(/\.(csv|txt)$/i)) { alert('Please upload a .csv file'); return; }
+        const reader = new FileReader();
+        reader.onload = (ev) => { setParsed(parseImportCSV(ev.target.result, loc)); setStep('preview'); };
+        reader.readAsText(file);
+      };
+
+      const totalTasks = parsed ? parsed.rooms.reduce((s, r) => s + r.restocking.length + r.cleaning.length + r.monthly.length, 0) : 0;
+      const newRooms    = parsed ? parsed.rooms.filter(r => !existingRooms.find(e => e.name.toLowerCase() === r.name.toLowerCase())) : [];
+      const mergeRooms  = parsed ? parsed.rooms.filter(r =>  existingRooms.find(e => e.name.toLowerCase() === r.name.toLowerCase())) : [];
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+             onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 flex flex-col overflow-hidden" style={{ maxHeight: '90vh' }}>
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 bg-indigo-600 flex-none">
+              <div>
+                <p className="text-white font-bold text-sm tracking-wide">Import Data</p>
+                <p className="text-indigo-200 text-xs mt-0.5">{loc}</p>
+              </div>
+              <button onClick={onClose} className="p-1.5 rounded-lg text-indigo-200 hover:text-white hover:bg-indigo-500 transition-colors">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+
+            {/* Step 1 — Upload */}
+            {step === 'upload' && (
+              <>
+                <div className="p-6 flex-1 overflow-y-auto">
+                  <div
+                    onDragOver={e => { e.preventDefault(); setDragging(true); }}
+                    onDragLeave={() => setDragging(false)}
+                    onDrop={e => { e.preventDefault(); setDragging(false); processFile(e.dataTransfer.files[0]); }}
+                    onClick={() => fileRef.current?.click()}
+                    className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all ${dragging ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/50'}`}
+                  >
+                    <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-indigo-100 flex items-center justify-center">
+                      <svg className="w-6 h-6 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                      </svg>
+                    </div>
+                    <p className="text-sm font-semibold text-gray-700 mb-1">Drop a CSV file here</p>
+                    <p className="text-xs text-gray-400">or click to browse</p>
+                    <input ref={fileRef} type="file" accept=".csv,.txt" className="hidden"
+                           onChange={e => { processFile(e.target.files[0]); e.target.value = ''; }} />
+                  </div>
+
+                  <div className="mt-5 bg-gray-50 rounded-xl p-4">
+                    <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3">Accepted CSV Columns</p>
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-1.5">
+                      {[
+                        ['Room',       'Required — room or area name'],
+                        ['Category',   'Restocking / Cleaning / Monthly'],
+                        ['Task',       'Required — task name'],
+                        ['Details',    'Where / what exactly'],
+                        ['How-To',     'Secondary how / notes'],
+                        ['Frequency',  'Weekly, Monthly, Quarterly…'],
+                        ['Priority',   'High / Medium / Low'],
+                        ['Assignee',   "Person's name"],
+                        ['Time Est.',  'e.g. 15 min, 1hr'],
+                        ['Location',   'Optional — filters to current location'],
+                      ].map(([col, desc]) => (
+                        <div key={col} className="flex items-baseline gap-2">
+                          <span className="text-xs font-semibold text-indigo-700 font-mono w-24 flex-none">{col}</span>
+                          <span className="text-xs text-gray-500">{desc}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 flex-none flex justify-end">
+                  <button onClick={onClose} className="px-4 py-2 text-xs font-medium bg-white border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-500 shadow-sm transition-colors">Cancel</button>
+                </div>
+              </>
+            )}
+
+            {/* Step 2 — Preview */}
+            {step === 'preview' && parsed && (
+              <>
+                <div className="flex-1 overflow-y-auto p-5 space-y-4">
+
+                  {/* Summary bar */}
+                  <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 flex items-center gap-5 flex-wrap">
+                    {[
+                      { val: parsed.rooms.length,  label: 'rooms',    color: 'text-indigo-700' },
+                      { val: totalTasks,            label: 'tasks',    color: 'text-indigo-700' },
+                      { val: newRooms.length,       label: 'new rooms',color: 'text-green-600'  },
+                      ...(mergeRooms.length ? [{ val: mergeRooms.length, label: 'existing rooms', color: 'text-amber-600' }] : []),
+                      ...(parsed.skipped   ? [{ val: parsed.skipped,    label: 'skipped (other location)', color: 'text-gray-400' }] : []),
+                    ].map(({ val, label, color }, i, arr) => (
+                      <React.Fragment key={label}>
+                        <div className="text-center">
+                          <p className={`text-2xl font-extrabold ${color}`}>{val}</p>
+                          <p className={`text-xs ${color} opacity-80`}>{label}</p>
+                        </div>
+                        {i < arr.length - 1 && <div className="w-px h-10 bg-indigo-200 flex-none" />}
+                      </React.Fragment>
+                    ))}
+                  </div>
+
+                  {/* Mode toggle — only if there are matching existing rooms */}
+                  {mergeRooms.length > 0 && (
+                    <div className="bg-white border border-gray-200 rounded-xl p-4">
+                      <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3">For existing rooms:</p>
+                      <div className="flex gap-2">
+                        {/* Append — default safe option */}
+                        <button onClick={() => setMode('append')}
+                          className={`flex-1 text-left p-3 rounded-xl border-2 transition-all ${mode === 'append' ? 'border-emerald-400 bg-emerald-50' : 'border-gray-200 hover:border-emerald-200'}`}>
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            <svg className={`w-3.5 h-3.5 flex-none ${mode === 'append' ? 'text-emerald-600' : 'text-gray-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4"/>
+                            </svg>
+                            <p className={`text-xs font-bold ${mode === 'append' ? 'text-emerald-700' : 'text-gray-700'}`}>Append tasks</p>
+                            {mode === 'append' && <span className="ml-auto text-[10px] font-bold bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded-full">Recommended</span>}
+                          </div>
+                          <p className="text-xs text-gray-400">Add imported tasks alongside existing ones — nothing is removed</p>
+                        </button>
+
+                        {/* Replace — destructive, visually alarming */}
+                        <button onClick={() => setMode('replace-rooms')}
+                          className={`flex-1 text-left p-3 rounded-xl border-2 transition-all ${mode === 'replace-rooms' ? 'border-red-500 bg-red-50' : 'border-red-200 bg-red-50/40 hover:border-red-400'}`}>
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            <svg className="w-3.5 h-3.5 flex-none text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                            </svg>
+                            <p className="text-xs font-bold text-red-700">Replace tasks</p>
+                            <span className="ml-auto text-[10px] font-bold bg-red-200 text-red-800 px-1.5 py-0.5 rounded-full">Destructive</span>
+                          </div>
+                          <p className="text-xs text-red-400">Deletes all existing tasks in matching rooms before importing</p>
+                        </button>
+                      </div>
+
+                      {/* Extra warning when Replace is active */}
+                      {mode === 'replace-rooms' && (
+                        <div className="mt-3 flex items-start gap-2 px-3 py-2.5 bg-red-100 border border-red-300 rounded-xl">
+                          <svg className="w-4 h-4 text-red-600 flex-none mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                          </svg>
+                          <p className="text-xs font-semibold text-red-700">
+                            <span className="font-black">Warning:</span> This will permanently delete all existing tasks in any room that matches your import. This cannot be undone. Consider downloading a JSON backup first.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Room preview list */}
+                  <div>
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Room Preview</p>
+                    <div className="space-y-2">
+                      {parsed.rooms.map(room => {
+                        const isNew  = !existingRooms.find(e => e.name.toLowerCase() === room.name.toLowerCase());
+                        const total  = room.restocking.length + room.cleaning.length + room.monthly.length;
+                        return (
+                          <div key={room.name} className="bg-white border border-gray-200 rounded-xl p-3 flex items-center gap-3">
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full flex-none ${isNew ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                              {isNew ? 'NEW' : 'EXISTING'}
+                            </span>
+                            <p className="text-sm font-semibold text-gray-800 flex-1 min-w-0 truncate">{room.name}</p>
+                            <div className="flex gap-1.5 items-center text-xs flex-none">
+                              {room.restocking.length > 0 && <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-semibold">{room.restocking.length}R</span>}
+                              {room.cleaning.length   > 0 && <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-semibold">{room.cleaning.length}C</span>}
+                              {room.monthly.length    > 0 && <span className="bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full font-semibold">{room.monthly.length}M</span>}
+                              <span className="text-gray-400 pl-1">{total} tasks</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Warnings */}
+                  {parsed.warnings?.length > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                      <p className="text-xs font-bold text-amber-700 mb-2">Warnings ({parsed.warnings.length})</p>
+                      <ul className="space-y-1">{parsed.warnings.map((w, i) => <li key={i} className="text-xs text-amber-700">• {w}</li>)}</ul>
+                    </div>
+                  )}
+
+                  {/* Errors */}
+                  {parsed.errors?.length > 0 && (
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                      <p className="text-xs font-bold text-red-700 mb-2">Errors ({parsed.errors.length})</p>
+                      <ul className="space-y-1">{parsed.errors.map((e, i) => <li key={i} className="text-xs text-red-700">• {e}</li>)}</ul>
+                    </div>
+                  )}
+
+                  {parsed.rooms.length === 0 && (
+                    <div className="text-center py-8">
+                      <p className="text-sm text-gray-500 font-semibold">No importable rows found</p>
+                      <p className="text-xs text-gray-400 mt-1">Make sure your CSV has Room and Task columns, and that the Location column (if present) matches "{loc}"</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 flex-none flex items-center justify-between">
+                  <button onClick={() => { setStep('upload'); setParsed(null); }}
+                    className="px-4 py-2 text-xs font-medium bg-white border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-500 shadow-sm transition-colors">
+                    ← Back
+                  </button>
+                  <div className="flex gap-2">
+                    <button onClick={onClose} className="px-4 py-2 text-xs font-medium bg-white border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-500 shadow-sm transition-colors">Cancel</button>
+                    <button
+                      onClick={() => { onImport(parsed.rooms, mode); onClose(); }}
+                      disabled={parsed.rooms.length === 0}
+                      className="px-5 py-2 text-xs font-semibold bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                      Import {totalTasks} Task{totalTasks !== 1 ? 's' : ''}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
+          </div>
+        </div>
+      );
+    }
+
     // ─── App ─────────────────────────────────────────────────────────────────────
     function App() {
       const [data, setData] = useState(loadData);
@@ -1139,8 +2326,73 @@
         return d["The Park House"]?.rooms[0]?.id ?? null;
       });
 
+      const [saveError, setSaveError] = useState(false);
+      const [lastSaved, setLastSaved] = useState(null);
+
       // Persist all data changes to localStorage automatically
-      useEffect(() => { saveData(data); }, [data]);
+      useEffect(() => {
+        if (saveData(data)) { setSaveError(false); setLastSaved(new Date()); }
+        else setSaveError(true);
+      }, [data]);
+
+      // ── Weekly reset: prompt user instead of auto-resetting ───────────────────
+      const [resetDue, setResetDue] = useState(() => {
+        const lastReset = parseInt(localStorage.getItem(RESET_KEY) || "0");
+        return lastReset < getThisMondayMidnight();
+      });
+
+      const doWeeklyReset = () => {
+        const resetItem = (item) => ({
+          ...item,
+          prevIncomplete: !item.completed && !item.notNeeded,
+          completed: false, notNeeded: false,
+        });
+        const resetList = (list) => list.map(e =>
+          e.type === 'zone' ? { ...e, items: e.items.map(resetItem) } : resetItem(e)
+        );
+        setData(prev => {
+          const next = {};
+          LOCATIONS.forEach(l => {
+            const ld = prev[l];
+            next[l] = {
+              ...ld,
+              rooms: ld.rooms.map(room => ({
+                ...room,
+                restocking: resetList(room.restocking),
+                cleaning:   resetList(room.cleaning),
+                monthly:    resetList(room.monthly),
+              })),
+            };
+          });
+          return next;
+        });
+        localStorage.setItem(RESET_KEY, Date.now().toString());
+        setResetDue(false);
+      };
+
+      // ── Weekly log: save a timestamped snapshot of a list ────────────────────
+      const [saveToast, setSaveToast] = useState(null); // { roomName, listLabel }
+
+      const saveWeeklyLog = (roomName, listKey, listLabel, items) => {
+        const entry = {
+          id: uid(),
+          savedAt: new Date().toISOString(),
+          weekStart: getThisMondayMidnight(),
+          location: loc,
+          room: roomName,
+          list: listKey,
+          listLabel,
+          items: flattenList(items),
+        };
+        try {
+          const existing = JSON.parse(localStorage.getItem(LOG_KEY) || "[]");
+          existing.push(entry);
+          if (existing.length > 200) existing.splice(0, existing.length - 200);
+          localStorage.setItem(LOG_KEY, JSON.stringify(existing));
+        } catch (e) {}
+        setSaveToast({ roomName, listLabel });
+        setTimeout(() => setSaveToast(null), 2500);
+      };
       const [view, setView] = useState("restocking");
       const [addingRoom,   setAddingRoom]   = useState(false);
       const [newRoomName,  setNewRoomName]  = useState("");
@@ -1150,6 +2402,16 @@
       const [sheetsUrl,       setSheetsUrl]       = useState(() => localStorage.getItem(SHEETS_KEY) || "");
       const [sheetsSyncing,   setSheetsSyncing]   = useState(false);
       const [sheetsLastSync,  setSheetsLastSync]  = useState(null);
+      const [showImportModal, setShowImportModal] = useState(false);
+      const [showPrintModal,  setShowPrintModal]  = useState(false);
+      const [dragRoomIdx,     setDragRoomIdx]     = useState(null);
+      const [dragOverRoomIdx, setDragOverRoomIdx] = useState(null);
+      const [confirmState,    setConfirmState]    = useState(null); // { message, onConfirm }
+      const [filterText,      setFilterText]      = useState("");
+      const [filterPriority,  setFilterPriority]  = useState("All");
+      const [filterFrequency, setFilterFrequency] = useState("All");
+      const [filterStatus,    setFilterStatus]    = useState("all");
+      const [filterAssignee,  setFilterAssignee]  = useState("All");
       const importRef = React.useRef();
 
       // ── Google Sheets auto-sync every 30 min ─────────────────────────────────
@@ -1166,7 +2428,7 @@
         handleSheetsSync("Auto");
         const interval = setInterval(() => handleSheetsSync("Auto"), 30 * 60 * 1000);
         return () => clearInterval(interval);
-      }, [sheetsUrl]); // re-runs only when URL changes
+      }, [sheetsUrl, handleSheetsSync]); // re-runs when URL or callback changes (avoids stale closure)
 
       const handleImport = (e) => {
         const file = e.target.files[0];
@@ -1194,13 +2456,54 @@
       const locColor = LOCATION_COLORS[loc];
 
       // ── Data helpers ─────────────────────────────────────────────
-      const setLoc2 = (l) => { setLoc(l); setRoomId(null); setView("restocking"); };
+      const resetFilters = () => {
+        setFilterText(""); setFilterPriority("All"); setFilterFrequency("All");
+        setFilterStatus("all"); setFilterAssignee("All");
+      };
+
+      const applyFilters = (list) => {
+        const filterItem = (item) => {
+          if (filterText) {
+            const t = filterText.toLowerCase();
+            if (![item.task, item.details, item.how, item.secondaryHow].some(f => (f||"").toLowerCase().includes(t))) return false;
+          }
+          if (filterPriority  !== "All"  && item.priority  !== filterPriority)  return false;
+          if (filterFrequency !== "All"  && item.frequency !== filterFrequency) return false;
+          if (filterAssignee  !== "All"  && item.assignee  !== filterAssignee)  return false;
+          if (filterStatus === "complete"   && !item.completed)                       return false;
+          if (filterStatus === "incomplete" && (item.completed || item.notNeeded))    return false;
+          if (filterStatus === "not-needed" && !item.notNeeded)                       return false;
+          if (filterStatus === "prv-inc"    && !item.prevIncomplete)                  return false;
+          return true;
+        };
+        return (list || []).flatMap(e => {
+          if (e.type === 'zone') {
+            const filteredItems = e.items.filter(filterItem);
+            // Always show empty zones (newly created); non-empty zones show only if items match
+            return (e.items.length === 0 || filteredItems.length > 0) ? [{ ...e, items: filteredItems }] : [];
+          }
+          return filterItem(e) ? [e] : [];
+        });
+      };
+
+      const requestConfirm = (message, onConfirm) => setConfirmState({ message, onConfirm });
+
+      const setLoc2 = (l) => { setLoc(l); setRoomId(null); setView("restocking"); resetFilters(); };
 
       const upd = (fn) => setData(prev => ({ ...prev, [loc]: fn(prev[loc]) }));
       const updRoom = (fn) => upd(d => ({ ...d, rooms: d.rooms.map(r => r.id === roomId ? fn(r) : r) }));
-      const updList = (key, fn) => updRoom(r => ({ ...r, [key]: fn(r[key]) }));
+      const updList = (key, fn) => updRoom(r => ({ ...r, [key]: fn(r[key] ?? []) }));
 
       // Room ops
+      const reorderRooms = (fromIdx, toIdx) => {
+        upd(d => {
+          const rooms = [...d.rooms];
+          const [moved] = rooms.splice(fromIdx, 1);
+          rooms.splice(toIdx, 0, moved);
+          return { ...d, rooms };
+        });
+      };
+
       const addRoom = () => {
         if (!newRoomName.trim()) return;
         const r = createRoom(newRoomName.trim());
@@ -1220,23 +2523,174 @@
       // Employee ops
       const updateEmployees = (employees) => upd(d => ({ ...d, employees }));
 
+      // Import ops
+      const handleImportData = (importedRooms, mode) => {
+        // Returns a Set of lowercased task names already in a list (including inside zones)
+        const existingNames = (list) => {
+          const names = new Set();
+          (list || []).forEach(e => {
+            if (e.type === 'zone') e.items.forEach(t => { if (t.task?.trim()) names.add(t.task.trim().toLowerCase()); });
+            else if (e.task?.trim()) names.add(e.task.trim().toLowerCase());
+          });
+          return names;
+        };
+
+        // Filter out imported tasks whose name already exists in the target list
+        const dedup = (existingList, incomingList) => {
+          const taken = existingNames(existingList);
+          return incomingList.filter(t => !taken.has((t.task || "").trim().toLowerCase()));
+        };
+
+        upd(d => {
+          let rooms = [...d.rooms];
+          importedRooms.forEach(importedRoom => {
+            const existingIdx = rooms.findIndex(r => r.name.toLowerCase() === importedRoom.name.toLowerCase());
+            if (existingIdx >= 0) {
+              if (mode === 'replace-rooms') {
+                rooms[existingIdx] = { ...rooms[existingIdx], restocking: importedRoom.restocking, cleaning: importedRoom.cleaning, monthly: importedRoom.monthly };
+              } else {
+                const ex = rooms[existingIdx];
+                rooms[existingIdx] = {
+                  ...ex,
+                  restocking: [...ex.restocking, ...dedup(ex.restocking, importedRoom.restocking)],
+                  cleaning:   [...ex.cleaning,   ...dedup(ex.cleaning,   importedRoom.cleaning)],
+                  monthly:    [...ex.monthly,     ...dedup(ex.monthly,    importedRoom.monthly)],
+                };
+              }
+            } else {
+              rooms.push({ id: uid(), name: importedRoom.name, restocking: importedRoom.restocking, cleaning: importedRoom.cleaning, monthly: importedRoom.monthly });
+            }
+          });
+          return { ...d, rooms };
+        });
+      };
+
       // Item ops
-      const addItem    = (key) => updList(key, items => [...items, createItem()]);
-      const deleteItem = (key, id) => updList(key, items => items.filter(i => i.id !== id));
-      const updateItem = (key, id, field, val) => updList(key, items => items.map(i => i.id === id ? { ...i, [field]: val } : i));
-      const moveItem   = (key, id, dir) => updList(key, items => {
-        const arr = [...items];
-        const idx = arr.findIndex(i => i.id === id);
-        if (dir === "up"   && idx > 0)               [arr[idx-1], arr[idx]] = [arr[idx], arr[idx-1]];
-        if (dir === "down" && idx < arr.length - 1)  [arr[idx], arr[idx+1]] = [arr[idx+1], arr[idx]];
-        return arr;
+      const addItem    = (key) => updList(key, list => [...list, createItem()]);
+      const deleteItem = (key, id) => updList(key, list => deleteFromList(list, id));
+      const updateItem = (key, id, field, val) => updList(key, list => updateInList(list, id, field, val));
+      const moveItem   = (key, id, dir) => updList(key, list => {
+        // Try top-level first
+        const topIdx = list.findIndex(e => e.id === id);
+        if (topIdx >= 0) {
+          const arr = [...list];
+          if (dir === "up"   && topIdx > 0)              [arr[topIdx-1], arr[topIdx]] = [arr[topIdx], arr[topIdx-1]];
+          if (dir === "down" && topIdx < arr.length - 1) [arr[topIdx], arr[topIdx+1]] = [arr[topIdx+1], arr[topIdx]];
+          return arr;
+        }
+        // Try inside zones
+        return list.map(e => {
+          if (e.type !== 'zone') return e;
+          const idx = e.items.findIndex(t => t.id === id);
+          if (idx < 0) return e;
+          const items = [...e.items];
+          if (dir === "up"   && idx > 0)              [items[idx-1], items[idx]] = [items[idx], items[idx-1]];
+          if (dir === "down" && idx < items.length-1) [items[idx], items[idx+1]] = [items[idx+1], items[idx]];
+          return { ...e, items };
+        });
       });
-      const reorderItem = (key, fromIdx, toIdx) => updList(key, items => {
-        const arr = [...items];
+      const reorderTopLevel = (key, fromIdx, toIdx) => updList(key, list => {
+        const arr = [...list];
         const [moved] = arr.splice(fromIdx, 1);
         arr.splice(toIdx, 0, moved);
         return arr;
       });
+      const reorderInZone = (key, zoneId, fromIdx, toIdx) => updList(key, list =>
+        list.map(e => {
+          if (e.id !== zoneId) return e;
+          const items = [...e.items];
+          const [moved] = items.splice(fromIdx, 1);
+          items.splice(toIdx, 0, moved);
+          return { ...e, items };
+        })
+      );
+
+      // Zone ops
+      const addZone = (key) => updList(key, list => [...list, createZone()]);
+      const deleteZone = (key, zoneId) => updList(key, list => {
+        const idx = list.findIndex(e => e.id === zoneId);
+        if (idx < 0) return list;
+        const zone = list[idx];
+        return [...list.slice(0, idx), ...(zone.items || []), ...list.slice(idx + 1)];
+      });
+      const renameZone = (key, zoneId, name) => updList(key, list =>
+        list.map(e => e.id === zoneId ? { ...e, name } : e)
+      );
+      const toggleZone = (key, zoneId) => updList(key, list =>
+        list.map(e => e.id === zoneId ? { ...e, collapsed: !e.collapsed } : e)
+      );
+      const addItemToZone = (key, zoneId) => updList(key, list =>
+        list.map(e => e.id === zoneId ? { ...e, items: [...e.items, createItem()] } : e)
+      );
+      const moveTaskToZone = (key, taskId, targetZoneId) => updList(key, list => {
+        let task = null;
+        const listWithoutTask = list.map(e => {
+          if (e.type === 'zone') {
+            const idx = e.items.findIndex(t => t.id === taskId);
+            if (idx >= 0) { task = e.items[idx]; return { ...e, items: e.items.filter(t => t.id !== taskId) }; }
+            return e;
+          }
+          if (e.id === taskId) { task = e; return null; }
+          return e;
+        }).filter(Boolean);
+        if (!task) return list;
+        if (!targetZoneId) return [...listWithoutTask, task];
+        return listWithoutTask.map(e => e.id === targetZoneId ? { ...e, items: [...e.items, task] } : e);
+      });
+
+      // Move a task to a specific position: targetZoneId=null → top level, else into that zone
+      const moveTaskCross = (key, taskId, targetZoneId, beforeIdx) => updList(key, list => {
+        let task = null;
+        const withoutTask = list.reduce((acc, e) => {
+          if (e.type === 'zone') {
+            const idx = e.items.findIndex(t => t.id === taskId);
+            if (idx >= 0) { task = e.items[idx]; acc.push({ ...e, items: e.items.filter(t => t.id !== taskId) }); }
+            else acc.push(e);
+          } else if (e.id === taskId) { task = e; }
+          else acc.push(e);
+          return acc;
+        }, []);
+        if (!task) return list;
+        if (targetZoneId === null || targetZoneId === undefined) {
+          const insertIdx = beforeIdx !== undefined ? Math.min(beforeIdx, withoutTask.length) : withoutTask.length;
+          const result = [...withoutTask];
+          result.splice(insertIdx, 0, task);
+          return result;
+        }
+        return withoutTask.map(e => {
+          if (e.id !== targetZoneId) return e;
+          const items = [...e.items];
+          const insertIdx = beforeIdx !== undefined ? Math.min(beforeIdx, items.length) : items.length;
+          items.splice(insertIdx, 0, task);
+          return { ...e, items };
+        });
+      });
+
+      // Move a task from one list type to another (e.g. restocking → monthly)
+      const moveTaskToList = (sourceKey, targetKey, taskId) => {
+        if (sourceKey === targetKey) return;
+        updRoom(r => {
+          let task = null;
+          const srcList = (r[sourceKey] ?? []).map(e => {
+            if (e.type === 'zone') {
+              const idx = e.items.findIndex(t => t.id === taskId);
+              if (idx >= 0) {
+                task = e.items[idx];
+                return { ...e, items: e.items.filter(t => t.id !== taskId) };
+              }
+              return e;
+            }
+            if (e.id === taskId) { task = e; return null; }
+            return e;
+          }).filter(Boolean);
+          if (!task) return r;
+          return {
+            ...r,
+            [sourceKey]: srcList,
+            [targetKey]: [...(r[targetKey] ?? []), task],
+          };
+        });
+      };
 
       // ─────────────────────────────────────────────────────────────
       return (
@@ -1299,6 +2753,18 @@
 
             {/* ── Data toolbar: Export / Backup / Restore ── */}
             <div className="ml-auto flex items-center gap-2 px-4 border-l border-gray-200">
+              {/* Custom Print */}
+              <button
+                onClick={() => setShowPrintModal(true)}
+                title="Print checklists filtered by employee, room, and list type"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-slate-50 hover:border-slate-400 hover:text-slate-700 transition-all shadow-sm"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+                </svg>
+                Custom Print
+              </button>
+
               {/* Export CSV */}
               <button
                 onClick={() => exportCSV(data)}
@@ -1335,6 +2801,25 @@
                 <input ref={importRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
               </label>
 
+              {/* Import Data from CSV */}
+              <button
+                onClick={() => setShowImportModal(true)}
+                title="Import tasks from a CSV file into the current location"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700 transition-all shadow-sm"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                </svg>
+                Import
+              </button>
+
+              {/* Last saved indicator */}
+              {lastSaved && !saveError && (
+                <span className="text-xs text-gray-400 font-medium whitespace-nowrap pr-1">
+                  ✓ Saved {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              )}
+
               {/* Google Sheets Auto-Sync */}
               <button
                 onClick={() => sheetsUrl ? handleSheetsSync("Manual") : setShowSheetsModal(true)}
@@ -1362,6 +2847,22 @@
             </div>
           </header>
 
+          {/* ── Save error banner ── */}
+          {saveError && (
+            <div className="no-print flex-none bg-red-600 text-white text-xs font-semibold px-5 py-2.5 flex items-center gap-3">
+              <svg className="w-4 h-4 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+              </svg>
+              <span>Data could not be saved — storage may be full. Export a backup immediately.</span>
+              <button
+                onClick={() => exportJSON(data)}
+                className="ml-2 px-3 py-1 bg-white text-red-700 font-semibold rounded-lg hover:bg-red-50 transition-colors text-xs"
+              >
+                Export Backup Now
+              </button>
+            </div>
+          )}
+
           {/* ── Body ── */}
           <div className="flex flex-1 overflow-hidden">
 
@@ -1382,6 +2883,58 @@
                 onClose={() => setShowSettings(false)}
               />
             )}
+            {showImportModal && (
+              <ImportModal
+                loc={loc}
+                existingRooms={locData.rooms}
+                onImport={handleImportData}
+                onClose={() => setShowImportModal(false)}
+              />
+            )}
+            {showPrintModal && (
+              <PrintModal
+                loc={loc}
+                locData={locData}
+                onClose={() => setShowPrintModal(false)}
+              />
+            )}
+            {confirmState && (
+              <ConfirmModal
+                message={confirmState.message}
+                onConfirm={() => { confirmState.onConfirm(); setConfirmState(null); }}
+                onCancel={() => setConfirmState(null)}
+              />
+            )}
+
+            {/* ── New-week banner ── */}
+            {resetDue && (
+              <div className="no-print fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 bg-white border border-amber-300 rounded-2xl shadow-xl text-sm">
+                <span className="text-lg">📅</span>
+                <span className="font-semibold text-gray-700">It's a new week — ready to reset all checklists?</span>
+                <button
+                  onClick={doWeeklyReset}
+                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-lg transition-colors"
+                >
+                  Reset Now
+                </button>
+                <button
+                  onClick={() => { localStorage.setItem(RESET_KEY, Date.now().toString()); setResetDue(false); }}
+                  className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-semibold rounded-lg transition-colors"
+                >
+                  Not Yet
+                </button>
+              </div>
+            )}
+
+            {/* ── Save toast ── */}
+            {saveToast && (
+              <div className="no-print fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-5 py-3 bg-emerald-600 text-white rounded-2xl shadow-xl text-sm font-semibold pointer-events-none">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7"/>
+                </svg>
+                Saved — {saveToast.roomName} · {saveToast.listLabel} logged for this week
+              </div>
+            )}
 
             <aside className="no-print flex-none w-56 flex flex-col bg-white border-r border-gray-200 shadow-sm">
               <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
@@ -1401,6 +2954,50 @@
                 </button>
               </div>
 
+              {/* ── Location-level completion infographics ── */}
+              <div className="px-3 py-3 border-b border-gray-200 bg-gray-50">
+                <div className="flex items-center justify-around">
+                  {LIST_META.map(({ key, abbr, light, border, text, bar, stroke }) => {
+                    const allItems = locData.rooms.flatMap(r => flattenList(r[key] || []));
+                    const total = allItems.length;
+                    const done  = allItems.filter(i => i.completed || i.notNeeded).length;
+                    const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
+                    const full  = pct === 100 && total > 0;
+                    const R = 8, circ = 2 * Math.PI * R, dash = (pct / 100) * circ;
+                    return (
+                      <div key={key} className="flex flex-col items-center gap-1">
+                        {/* Pie chart or green checkmark */}
+                        {full ? (
+                          <svg className="w-7 h-7" viewBox="0 0 24 24" fill="none">
+                            <circle cx="12" cy="12" r="10" fill="#dcfce7"/>
+                            <path d="M7 13l3 3 7-7" stroke="#16a34a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        ) : (
+                          <svg className="w-7 h-7" viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r={R} fill="none" stroke="#e5e7eb" strokeWidth="3.5"/>
+                            {pct > 0 && (
+                              <circle cx="12" cy="12" r={R} fill="none" stroke={stroke} strokeWidth="3.5"
+                                strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
+                                transform="rotate(-90 12 12)"/>
+                            )}
+                          </svg>
+                        )}
+                        {/* Letter bubble */}
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border ${
+                          full ? "bg-green-50 text-green-700 border-green-200" : `${light} ${text} ${border}`
+                        }`}>
+                          {abbr}
+                        </div>
+                        {/* Percentage */}
+                        <span className={`text-[10px] font-bold leading-none ${full ? "text-green-600" : text}`}>
+                          {pct}%
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
               <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
                 {locData.rooms.length === 0 && (
                   <div className="text-center py-8 px-3">
@@ -1408,13 +3005,33 @@
                     <p className="text-xs text-gray-400 italic">No rooms added yet.<br/>Use the button below.</p>
                   </div>
                 )}
-                {locData.rooms.map(r => (
+                {locData.rooms.map((r, idx) => (
                   <div
                     key={r.id}
-                    className={`group/room flex items-center rounded-full transition-all ${
-                      roomId === r.id ? "bg-blue-600 shadow-sm" : "hover:bg-gray-100"
+                    draggable
+                    onDragStart={() => setDragRoomIdx(idx)}
+                    onDragOver={e => { e.preventDefault(); setDragOverRoomIdx(idx); }}
+                    onDrop={e => { e.preventDefault(); if (dragRoomIdx !== null && dragRoomIdx !== idx) reorderRooms(dragRoomIdx, idx); setDragRoomIdx(null); setDragOverRoomIdx(null); }}
+                    onDragEnd={() => { setDragRoomIdx(null); setDragOverRoomIdx(null); }}
+                    className={`group/room flex items-center rounded-xl transition-all ${
+                      dragRoomIdx === idx     ? "opacity-40 bg-slate-100" :
+                      dragOverRoomIdx === idx && dragRoomIdx !== idx ? "ring-2 ring-blue-400 ring-inset" :
+                      roomId === r.id        ? "bg-blue-600 shadow-sm" :
+                                               "hover:bg-gray-100"
                     }`}
                   >
+                    {/* Drag handle */}
+                    <div
+                      className={`pl-2 flex-none cursor-grab active:cursor-grabbing opacity-0 group-hover/room:opacity-100 transition-opacity ${roomId === r.id ? "text-blue-300" : "text-gray-300"}`}
+                      title="Drag to reorder"
+                    >
+                      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 16 16">
+                        <circle cx="5" cy="4" r="1.2"/><circle cx="11" cy="4" r="1.2"/>
+                        <circle cx="5" cy="8" r="1.2"/><circle cx="11" cy="8" r="1.2"/>
+                        <circle cx="5" cy="12" r="1.2"/><circle cx="11" cy="12" r="1.2"/>
+                      </svg>
+                    </div>
+
                     {editingRoom?.id === r.id ? (
                       <input
                         autoFocus
@@ -1427,12 +3044,29 @@
                     ) : (
                       <>
                         <button
-                          onClick={() => { setRoomId(r.id); setView("restocking"); }}
-                          className={`flex-1 text-left px-4 py-2 text-xs truncate font-semibold ${
+                          onClick={() => { setRoomId(r.id); setView("restocking"); resetFilters(); }}
+                          className={`flex-1 text-left px-3 py-2 text-xs font-semibold ${
                             roomId === r.id ? "text-white" : "text-gray-600"
                           }`}
                         >
-                          {r.name}
+                          <span className="block truncate mb-1">{r.name}</span>
+                          {LIST_META.map(({ key, abbr, bar, text }) => {
+                            const items = flattenList(r[key] || []);
+                            const total = items.length;
+                            const done  = items.filter(i => i.completed || i.notNeeded).length;
+                            const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
+                            const active = roomId === r.id;
+                            return (
+                              <div key={key} className="flex items-center gap-1 mt-0.5">
+                                <span className={`text-[9px] font-bold w-3 flex-none ${active ? "text-blue-200" : text}`}>{abbr}</span>
+                                <div className={`h-1.5 rounded-full overflow-hidden flex-1 ${active ? "bg-blue-500" : "bg-gray-200"}`}>
+                                  <div className={`h-1.5 rounded-full transition-all duration-300 ${active ? "bg-white/80" : bar}`}
+                                       style={{ width: `${pct}%` }}/>
+                                </div>
+                                <span className={`text-[9px] font-semibold w-7 text-right flex-none ${active ? "text-blue-200" : "text-gray-400"}`}>{pct}%</span>
+                              </div>
+                            );
+                          })}
                         </button>
                         <div className="pr-2 flex gap-0.5 opacity-0 group-hover/room:opacity-100 transition-opacity">
                           <button
@@ -1445,7 +3079,7 @@
                             </svg>
                           </button>
                           <button
-                            onClick={() => deleteRoom(r.id)}
+                            onClick={() => requestConfirm(`Delete "${r.name}" and all its tasks? This cannot be undone.`, () => deleteRoom(r.id))}
                             title="Delete room"
                             className={`p-1 rounded-full ${roomId === r.id ? "text-blue-200 hover:text-white hover:bg-blue-500" : "text-gray-300 hover:text-red-500 hover:bg-red-50"}`}
                           >
@@ -1498,7 +3132,7 @@
                   loc={loc}
                   locData={locData}
                   locColor={locColor}
-                  onSelectRoom={(id) => { setRoomId(id); setView("restocking"); }}
+                  onSelectRoom={(id) => { setRoomId(id); setView("restocking"); resetFilters(); }}
                 />
               ) : (
                 <div className="p-5 max-w-none">
@@ -1543,57 +3177,121 @@
                         ))}
                       </div>
 
-                      {/* Print */}
-                      <button
-                        onClick={() => openPrintWindow(loc, room, view)}
-                        className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white border border-gray-200 rounded-xl hover:bg-gray-50 shadow-sm text-gray-600 transition-colors"
-                      >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
-                        </svg>
-                        Print
-                      </button>
+                      {/* Print + Save stack */}
+                      <div className="flex flex-col gap-1.5">
+                        <button
+                          onClick={() => openPrintWindow(loc, room, view)}
+                          className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white border border-gray-200 rounded-xl hover:bg-gray-50 shadow-sm text-gray-600 transition-colors"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+                          </svg>
+                          Print
+                        </button>
+                        <button
+                          onClick={() => {
+                            const listMeta = { restocking: "Restocking", cleaning: "Cleaning", monthly: "Monthly" };
+                            saveWeeklyLog(room.name, view, listMeta[view] || view, room[view] || []);
+                          }}
+                          className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-emerald-50 border border-emerald-200 rounded-xl hover:bg-emerald-100 shadow-sm text-emerald-700 transition-colors"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/>
+                          </svg>
+                          Save
+                        </button>
+                      </div>
                     </div>
                   </div>
+
+                  {/* Filter bar */}
+                  <FilterBar
+                    allItems={flattenList(room[view] || [])}
+                    employees={locData.employees ?? []}
+                    text={filterText}
+                    priority={filterPriority}
+                    frequency={filterFrequency}
+                    status={filterStatus}
+                    assignee={filterAssignee}
+                    onText={setFilterText}
+                    onPriority={setFilterPriority}
+                    onFrequency={setFilterFrequency}
+                    onStatus={setFilterStatus}
+                    onAssignee={setFilterAssignee}
+                    onClear={resetFilters}
+                  />
 
                   {/* Checklist panels */}
                   {view === "restocking" && (
                     <ChecklistPanel
                       title="Restocking"
                       accent="amber"
-                      items={room.restocking}
+                      list={applyFilters(room.restocking)}
                       employees={locData.employees ?? []}
                       onUpdate={(id, f, v) => updateItem("restocking", id, f, v)}
                       onAdd={() => addItem("restocking")}
-                      onDelete={id => deleteItem("restocking", id)}
+                      onDelete={id => requestConfirm("Delete this task? This cannot be undone.", () => deleteItem("restocking", id))}
                       onMove={(id, dir) => moveItem("restocking", id, dir)}
-                      onReorder={(from, to) => reorderItem("restocking", from, to)}
+                      onAddZone={() => addZone("restocking")}
+                      onDeleteZone={id => deleteZone("restocking", id)}
+                      onRenameZone={(zoneId, name) => renameZone("restocking", zoneId, name)}
+                      onToggleZone={zoneId => toggleZone("restocking", zoneId)}
+                      onAddItemToZone={zoneId => addItemToZone("restocking", zoneId)}
+                      onReorderTopLevel={(from, to) => reorderTopLevel("restocking", from, to)}
+                      onReorderInZone={(zoneId, from, to) => reorderInZone("restocking", zoneId, from, to)}
+                      onMoveTaskToZone={(taskId, zoneId) => moveTaskToZone("restocking", taskId, zoneId)}
+                      onMoveTaskCross={(taskId, zoneId, beforeIdx) => moveTaskCross("restocking", taskId, zoneId, beforeIdx)}
+                      requestConfirm={requestConfirm}
+                      listKey="restocking"
+                      onMoveToList={(taskId, targetKey) => moveTaskToList("restocking", targetKey, taskId)}
                     />
                   )}
                   {view === "cleaning" && (
                     <ChecklistPanel
                       title="Cleaning"
                       accent="emerald"
-                      items={room.cleaning}
+                      list={applyFilters(room.cleaning)}
                       employees={locData.employees ?? []}
                       onUpdate={(id, f, v) => updateItem("cleaning", id, f, v)}
                       onAdd={() => addItem("cleaning")}
-                      onDelete={id => deleteItem("cleaning", id)}
+                      onDelete={id => requestConfirm("Delete this task? This cannot be undone.", () => deleteItem("cleaning", id))}
                       onMove={(id, dir) => moveItem("cleaning", id, dir)}
-                      onReorder={(from, to) => reorderItem("cleaning", from, to)}
+                      onAddZone={() => addZone("cleaning")}
+                      onDeleteZone={id => deleteZone("cleaning", id)}
+                      onRenameZone={(zoneId, name) => renameZone("cleaning", zoneId, name)}
+                      onToggleZone={zoneId => toggleZone("cleaning", zoneId)}
+                      onAddItemToZone={zoneId => addItemToZone("cleaning", zoneId)}
+                      onReorderTopLevel={(from, to) => reorderTopLevel("cleaning", from, to)}
+                      onReorderInZone={(zoneId, from, to) => reorderInZone("cleaning", zoneId, from, to)}
+                      onMoveTaskToZone={(taskId, zoneId) => moveTaskToZone("cleaning", taskId, zoneId)}
+                      onMoveTaskCross={(taskId, zoneId, beforeIdx) => moveTaskCross("cleaning", taskId, zoneId, beforeIdx)}
+                      requestConfirm={requestConfirm}
+                      listKey="cleaning"
+                      onMoveToList={(taskId, targetKey) => moveTaskToList("cleaning", targetKey, taskId)}
                     />
                   )}
                   {view === "monthly" && (
                     <ChecklistPanel
                       title="Monthly"
                       accent="violet"
-                      items={room.monthly}
+                      list={applyFilters(room.monthly)}
                       employees={locData.employees ?? []}
                       onUpdate={(id, f, v) => updateItem("monthly", id, f, v)}
                       onAdd={() => addItem("monthly")}
-                      onDelete={id => deleteItem("monthly", id)}
+                      onDelete={id => requestConfirm("Delete this task? This cannot be undone.", () => deleteItem("monthly", id))}
                       onMove={(id, dir) => moveItem("monthly", id, dir)}
-                      onReorder={(from, to) => reorderItem("monthly", from, to)}
+                      onAddZone={() => addZone("monthly")}
+                      onDeleteZone={id => deleteZone("monthly", id)}
+                      onRenameZone={(zoneId, name) => renameZone("monthly", zoneId, name)}
+                      onToggleZone={zoneId => toggleZone("monthly", zoneId)}
+                      onAddItemToZone={zoneId => addItemToZone("monthly", zoneId)}
+                      onReorderTopLevel={(from, to) => reorderTopLevel("monthly", from, to)}
+                      onReorderInZone={(zoneId, from, to) => reorderInZone("monthly", zoneId, from, to)}
+                      onMoveTaskToZone={(taskId, zoneId) => moveTaskToZone("monthly", taskId, zoneId)}
+                      onMoveTaskCross={(taskId, zoneId, beforeIdx) => moveTaskCross("monthly", taskId, zoneId, beforeIdx)}
+                      requestConfirm={requestConfirm}
+                      listKey="monthly"
+                      onMoveToList={(taskId, targetKey) => moveTaskToList("monthly", targetKey, taskId)}
                     />
                   )}
                 </div>
