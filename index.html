@@ -199,7 +199,13 @@
       const handleOpen = () => {
         if (btnRef.current) {
           const r = btnRef.current.getBoundingClientRect();
-          setPos({ top: r.bottom + 4, left: r.left + r.width / 2 });
+          const spaceBelow = window.innerHeight - r.bottom - 8;
+          const spaceAbove = r.top - 8;
+          if (spaceBelow >= spaceAbove) {
+            setPos({ top: r.bottom + 4, bottom: "auto", left: r.left + r.width / 2, maxH: Math.max(spaceBelow, 100) });
+          } else {
+            setPos({ top: "auto", bottom: window.innerHeight - r.top + 4, left: r.left + r.width / 2, maxH: Math.max(spaceAbove, 100) });
+          }
         }
         setOpen(v => !v);
       };
@@ -225,8 +231,8 @@
               {/* Backdrop to close on outside click */}
               <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
               {/* Dropdown — fixed so it escapes overflow:hidden on the panel */}
-              <div className="fixed z-50 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 min-w-44 overflow-hidden"
-                   style={{ top: pos.top, left: pos.left, transform: "translateX(-50%)" }}>
+              <div className="fixed z-50 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 min-w-44"
+                   style={{ top: pos.top, bottom: pos.bottom, left: pos.left, transform: "translateX(-50%)", maxHeight: pos.maxH, overflowY: 'auto' }}>
                 <button
                   onClick={() => { onSave(""); setOpen(false); }}
                   className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center gap-2 ${
@@ -267,11 +273,11 @@
     }
 
     // ─── ChecklistRow ─────────────────────────────────────────────────────────────
-    function ChecklistRow({ item, idx, total, employees, showHow, showSecondaryHow, showFrequency, showAssignee, showTime, showSupplies, showPriority, showLastDone, onUpdate, onDelete, onMoveUp, onMoveDown, onDragStart, onDragOver, onDrop, onDragEnd, isDragging, isDragOver, isInZone, zones, onMoveToZone, listKey, onMoveToList }) {
+    function ChecklistRow({ item, idx, total, employees, showHow, showSecondaryHow, showFrequency, showAssignee, showTime, showSupplies, showPriority, showLastDone, onUpdate, onDelete, onMoveUp, onMoveDown, onDragStart, onDragOver, onDrop, onDragEnd, isDragging, isDragOver, isInZone, zones, onMoveToZone, listKey, onMoveToList, rooms, currentRoomId, onMoveToRoom }) {
       const [showMoveMenu,     setShowMoveMenu]     = useState(false);
       const [showListMoveMenu, setShowListMoveMenu] = useState(false);
       const [moveMenuPos,     setMoveMenuPos]     = useState({ bottom: 0, right: 0 });
-      const [listMoveMenuPos, setListMoveMenuPos] = useState({ bottom: 0, right: 0 });
+      const [listMoveMenuPos, setListMoveMenuPos] = useState({ top: null, bottom: 0, right: 0 });
       const moveMenuBtnRef     = React.useRef(null);
       const listMoveMenuBtnRef = React.useRef(null);
 
@@ -285,11 +291,17 @@
       const openListMoveMenu = () => {
         if (listMoveMenuBtnRef.current) {
           const r = listMoveMenuBtnRef.current.getBoundingClientRect();
-          setListMoveMenuPos({ bottom: window.innerHeight - r.top + 4, right: window.innerWidth - r.right });
+          const spaceBelow = window.innerHeight - r.bottom - 8;
+          const spaceAbove = r.top - 8;
+          if (spaceBelow >= spaceAbove) {
+            setListMoveMenuPos({ top: r.bottom + 4, bottom: null, right: window.innerWidth - r.right, maxH: Math.max(spaceBelow, 120) });
+          } else {
+            setListMoveMenuPos({ top: null, bottom: window.innerHeight - r.top + 4, right: window.innerWidth - r.right, maxH: Math.max(spaceAbove, 120) });
+          }
         }
         setShowListMoveMenu(v => !v);
       };
-      const today = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      const today = new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" });
       const ps = item.priority ? PRIORITY_STYLES[item.priority] : null;
 
       const handleCheck = () => {
@@ -528,14 +540,14 @@
                   )}
                 </div>
               )}
-              {/* Move to different list */}
-              {onMoveToList && (
+              {/* Move to different list or room */}
+              {(onMoveToList || onMoveToRoom) && (
                 <div className="relative">
                   <button
                     ref={listMoveMenuBtnRef}
                     onClick={openListMoveMenu}
                     className="p-1 rounded text-gray-300 hover:text-indigo-500 hover:bg-indigo-50 leading-none transition-colors"
-                    title="Move to a different list"
+                    title="Move to a different list or room"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
@@ -544,18 +556,39 @@
                   {showListMoveMenu && (
                     <>
                       <div className="fixed inset-0 z-40" onClick={() => setShowListMoveMenu(false)} />
-                      <div className="fixed z-50 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 min-w-44 overflow-hidden"
-                           style={{ bottom: listMoveMenuPos.bottom, right: listMoveMenuPos.right }}>
-                        <p className="px-3 pb-1 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Move to list</p>
-                        {LIST_META.filter(m => m.key !== listKey).map(({ key, label, abbr, light, text, border }) => (
-                          <button key={key}
-                            onClick={() => { onMoveToList(key); setShowListMoveMenu(false); }}
-                            className={`w-full text-left px-3 py-1.5 text-xs font-semibold flex items-center gap-2 hover:${light} transition-colors`}
-                          >
-                            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold border ${light} ${text} ${border}`}>{abbr}</span>
-                            <span className={text}>{label}</span>
-                          </button>
-                        ))}
+                      <div className="fixed z-50 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 min-w-52"
+                           style={{ top: listMoveMenuPos.top ?? undefined, bottom: listMoveMenuPos.bottom ?? undefined, right: listMoveMenuPos.right, maxHeight: listMoveMenuPos.maxH, overflowY: 'auto' }}>
+                        {onMoveToList && (
+                          <>
+                            <p className="px-3 pt-1 pb-1 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Move to list</p>
+                            {LIST_META.filter(m => m.key !== listKey).map(({ key, label, abbr, stroke }) => (
+                              <button key={key}
+                                onClick={() => { onMoveToList(key); setShowListMoveMenu(false); }}
+                                className="w-full text-left px-3 py-2 text-xs font-semibold flex items-center gap-2 hover:bg-gray-50 transition-colors"
+                              >
+                                <span className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold flex-none text-white" style={{ backgroundColor: stroke }}>{abbr}</span>
+                                <span className="text-gray-700">{label}</span>
+                              </button>
+                            ))}
+                          </>
+                        )}
+                        {onMoveToRoom && rooms && rooms.filter(r => r.id !== currentRoomId).length > 0 && (
+                          <>
+                            <div className="border-t border-gray-100 my-1" />
+                            <p className="px-3 pb-1 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Move to room</p>
+                            {rooms.filter(r => r.id !== currentRoomId).map(r => (
+                              <button key={r.id}
+                                onClick={() => { onMoveToRoom(r.id); setShowListMoveMenu(false); }}
+                                className="w-full text-left px-3 py-2 text-xs font-semibold flex items-center gap-2 hover:bg-blue-50 transition-colors"
+                              >
+                                <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-[10px] font-bold border border-blue-200 flex-none">
+                                  {r.name.charAt(0).toUpperCase()}
+                                </span>
+                                <span className="truncate text-gray-700">{r.name}</span>
+                              </button>
+                            ))}
+                          </>
+                        )}
                       </div>
                     </>
                   )}
@@ -596,7 +629,8 @@
     function ChecklistPanel({ title, accent, list, employees, onUpdate, onAdd, onDelete, onMove,
                               onAddZone, onDeleteZone, onRenameZone, onToggleZone,
                               onAddItemToZone, onReorderTopLevel, onReorderInZone, onMoveTaskToZone, onMoveTaskCross,
-                              requestConfirm, listKey, onMoveToList }) {
+                              requestConfirm, listKey, onMoveToList, onBulkSet, rooms, currentRoomId, onMoveToRoom,
+                              onBulkDone, onBulkNotNeeded }) {
       const c = ACCENT[accent] || ACCENT.amber;
       const [showHow,          setShowHow]          = useState(true);
       const [showSecondaryHow, setShowSecondaryHow] = useState(true);
@@ -652,12 +686,68 @@
             <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${c.count}`}>
               {formatTime(allItems.reduce((s, i) => s + parseMinutes(i.time), 0))}
             </span>
+            {/* Bulk controls - native selects, no custom dropdown needed */}
+            {allItems.length > 0 && onBulkSet && (
+              <div className="ml-auto flex items-center gap-1.5 no-print">
+                <select
+                  value=""
+                  onChange={e => { const v = e.target.value; if (v !== "") { onBulkSet('assignee', v === '__unassign__' ? '' : v); e.target.value = ""; } }}
+                  className="text-xs font-semibold px-2 py-1 bg-white/70 border border-white/50 rounded-lg text-gray-600 cursor-pointer hover:bg-white transition-colors shadow-sm"
+                  title="Assign all tasks in this list to one person"
+                >
+                  <option value="">Assign all...</option>
+                  <option value="__unassign__">-- Unassign all --</option>
+                  {employees.map(emp => { const n = emp.name || emp; return <option key={n} value={n}>{n}</option>; })}
+                </select>
+                <select
+                  value=""
+                  onChange={e => { if (e.target.value !== "") { onBulkSet('frequency', e.target.value); e.target.value = ""; } }}
+                  className="text-xs font-semibold px-2 py-1 bg-white/70 border border-white/50 rounded-lg text-gray-600 cursor-pointer hover:bg-white transition-colors shadow-sm"
+                  title="Set frequency for all tasks in this list"
+                >
+                  <option value="">Set freq...</option>
+                  {FREQUENCY_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
+                </select>
+              </div>
+            )}
             {allItems.length > 0 && (
-              <span className="ml-auto text-xs font-semibold px-2.5 py-0.5 rounded-full bg-green-100 text-green-700">
+              <span className={`${onBulkSet ? "" : "ml-auto"} text-xs font-semibold px-2.5 py-0.5 rounded-full bg-green-100 text-green-700`}>
                 {completedCount}/{allItems.length} done
               </span>
             )}
+
           </div>
+
+          {/* Mark all bar */}
+          {allItems.length > 0 && (onBulkDone || onBulkNotNeeded) && (
+            <div className="flex items-center gap-2 px-4 py-1.5 bg-gray-50 border-b border-gray-100 no-print">
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mr-1">Mark all:</span>
+              {onBulkDone && (
+                <button
+                  onClick={onBulkDone}
+                  title="Mark all tasks in this list as done"
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 transition-colors"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7"/>
+                  </svg>
+                  Done
+                </button>
+              )}
+              {onBulkNotNeeded && (
+                <button
+                  onClick={onBulkNotNeeded}
+                  title="Mark all tasks in this list as not needed"
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200 transition-colors"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7"/>
+                  </svg>
+                  Not Needed
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Table */}
           <div className="overflow-x-auto">
@@ -806,6 +896,9 @@
                             onMoveToZone={targetZoneId => onMoveTaskToZone(item.id, targetZoneId)}
                             listKey={listKey}
                             onMoveToList={onMoveToList ? targetKey => onMoveToList(item.id, targetKey) : undefined}
+                            rooms={rooms}
+                            currentRoomId={currentRoomId}
+                            onMoveToRoom={onMoveToRoom ? targetRoomId => onMoveToRoom(item.id, targetRoomId) : undefined}
                             isDragging={dragSrc?.kind === 'zoneTask' && dragSrc.zoneId === entry.id && dragSrc.zIdx === zIdx}
                             isDragOver={dragOver?.kind === 'zoneTask' && dragOver.zoneId === entry.id && dragOver.zIdx === zIdx && !(dragSrc?.kind === 'zoneTask' && dragSrc.zoneId === entry.id && dragSrc.zIdx === zIdx)}
                             onDragStart={e => { e.stopPropagation(); e.dataTransfer.effectAllowed = "move"; setDragSrc({ kind: 'zoneTask', zoneId: entry.id, zIdx, id: item.id }); }}
@@ -872,6 +965,9 @@
                       onMoveToZone={targetZoneId => onMoveTaskToZone(entry.id, targetZoneId)}
                       listKey={listKey}
                       onMoveToList={onMoveToList ? targetKey => onMoveToList(entry.id, targetKey) : undefined}
+                      rooms={rooms}
+                      currentRoomId={currentRoomId}
+                      onMoveToRoom={onMoveToRoom ? targetRoomId => onMoveToRoom(entry.id, targetRoomId) : undefined}
                       isDragging={dragSrc?.kind === 'topTask' && dragSrc.topIdx === topIdx}
                       isDragOver={dragOver?.kind === 'topTask' && dragOver.topIdx === topIdx && !(dragSrc?.kind === 'topTask' && dragSrc.topIdx === topIdx)}
                       onDragStart={e => { e.dataTransfer.effectAllowed = "move"; setDragSrc({ kind: 'topTask', topIdx, id: entry.id }); }}
@@ -893,6 +989,22 @@
               </tbody>
             </table>
           </div>
+
+          {/* Total time footer */}
+          {allItems.length > 0 && (() => {
+            const totalMins = allItems.reduce((s, i) => s + parseMinutes(i.time), 0);
+            const timedCount = allItems.filter(i => parseMinutes(i.time) > 0).length;
+            if (totalMins === 0) return null;
+            return (
+              <div className={`${c.bg} border-t border-gray-100 px-4 py-2 flex items-center gap-2 justify-end no-print`}>
+                <svg className="w-3.5 h-3.5 text-gray-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                <span className="text-xs text-gray-400">{timedCount} timed task{timedCount !== 1 ? "s" : ""}</span>
+                <span className="text-xs font-bold text-gray-600 ml-1">{formatTime(totalMins)}</span>
+              </div>
+            );
+          })()}
 
           {/* Add row + Add Zone */}
           <div className="p-2 border-t border-gray-100 no-print flex gap-2">
@@ -949,44 +1061,57 @@
         const who   = employee === "All" ? "All Staff" : employee;
         const color = { restocking:"#f59e0b", cleaning:"#10b981", monthly:"#8b5cf6" };
 
+        const priStyle = { High: "background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5", Medium: "background:#fef9c3;color:#a16207;border:1px solid #fde047", Low: "background:#dcfce7;color:#15803d;border:1px solid #86efac" };
+        const priTag = p => p && priStyle[p] ? `<span style="font-size:7.5pt;font-weight:bold;padding:1pt 5pt;border-radius:20pt;${priStyle[p]}">${p}</span>` : "";
+
         const makeRow = (task, indent) => `
           <tr${indent ? ' class="zindent"' : ''}>
             <td class="cb"><span class="chk"></span></td>
             <td class="task">${esc(task.task)}</td>
-            <td>${esc(task.details)}</td>
-            <td>${esc(task.how)}</td>
-            <td>${esc(task.secondaryHow)}</td>
+            <td class="details">${esc(task.details)}</td>
+            <td class="how">${esc(task.how)}</td>
+            <td class="show2">${esc(task.secondaryHow)}</td>
+            <td class="pri">${priTag(task.priority)}</td>
             <td class="narrow">${esc(task.time)}</td>
-            <td>${esc(task.supplies)}</td>
+            <td class="supplies">${esc(task.supplies)}</td>
           </tr>`;
 
         let sections = "";
+        const PRI_ORDER = { "High": 0, "Medium": 1, "Low": 2 };
+        const byPri = (a, b) => (PRI_ORDER[a.priority] ?? 3) - (PRI_ORDER[b.priority] ?? 3);
+
         locData.rooms.forEach(room => {
           if (!rooms.has(room.id)) return;
           let roomHtml = "";
           LIST_META.forEach(({ key, label }) => {
             if (!lists.has(key)) return;
-            let bodyHtml = ""; let taskCount = 0;
-            (room[key] || []).forEach(entry => {
-              if (entry.type === "zone") {
-                let zRows = ""; let zCount = 0;
-                entry.items.forEach(t => {
-                  if (employee !== "All" && t.assignee !== employee) return;
-                  zRows += makeRow(t, true); zCount++; taskCount++;
-                });
-                if (zCount > 0) bodyHtml += `<tr class="zone-hdr"><td colspan="5">▸ ${esc(entry.name)}</td></tr>${zRows}`;
-              } else {
-                if (employee !== "All" && entry.assignee !== employee) return;
-                bodyHtml += makeRow(entry, false); taskCount++;
-              }
+            let taskCount = 0;
+
+            // Build zone rows (tasks sorted by priority within each zone)
+            let zoneHtml = "";
+            (room[key] || []).filter(e => e.type === 'zone').forEach(entry => {
+              const zItems = entry.items
+                .filter(t => employee === "All" || t.assignee === employee)
+                .sort(byPri);
+              if (zItems.length === 0) return;
+              taskCount += zItems.length;
+              zoneHtml += `<tr class="zone-hdr"><td colspan="8">▸ ${esc(entry.name)}</td></tr>`;
+              zoneHtml += zItems.map(t => makeRow(t, true)).join("");
             });
+
+            // Build top-level task rows sorted by priority
+            const topItems = (room[key] || [])
+              .filter(e => e.type !== 'zone' && (employee === "All" || e.assignee === employee))
+              .sort(byPri);
+            taskCount += topItems.length;
+            const topHtml = topItems.map(e => makeRow(e, false)).join("");
             if (taskCount === 0) return;
             roomHtml += `
               <div class="lsec">
                 <div class="lhdr" style="border-left:4px solid ${color[key]}; color:${color[key]}">${label}</div>
                 <table>
-                  <thead><tr><th class="cb"></th><th class="task">Task</th><th>Details</th><th>How?</th><th>Secondary How</th><th class="narrow">Time</th><th>Supplies</th></tr></thead>
-                  <tbody>${bodyHtml}</tbody>
+                  <thead><tr><th class="cb"></th><th class="task">Task</th><th class="details">Details</th><th class="how">How?</th><th class="show2">Secondary How</th><th class="pri">Priority</th><th class="narrow">Time</th><th class="supplies">Supplies</th></tr></thead>
+                  <tbody>${zoneHtml}${topHtml}</tbody>
                 </table>
               </div>`;
           });
@@ -1001,20 +1126,26 @@
 <style>
   body{font-family:Arial,sans-serif;font-size:9.5pt;margin:0;background:#fff}
   @page{size:portrait;margin:1.2cm}
+  html,body{height:auto;overflow:visible}
   .phead{border-bottom:2.5px solid #1e293b;padding-bottom:8pt;margin-bottom:16pt}
   .phead h1{font-size:15pt;font-weight:bold;margin:0 0 2pt;color:#0f172a}
   .phead .sub{font-size:9pt;color:#64748b;margin:0}
-  .rsec{margin-bottom:20pt;break-inside:avoid-page}
-  .rhdr{font-size:12pt;font-weight:bold;color:#1e293b;padding:5pt 0 4pt;border-bottom:1.5px solid #cbd5e1;margin-bottom:8pt}
-  .lsec{margin-bottom:10pt}
+  .rsec{margin-bottom:12pt}
+  .rhdr{font-size:12pt;font-weight:bold;color:#1e293b;padding:5pt 0 4pt;border-bottom:1.5px solid #cbd5e1;margin-bottom:6pt;break-after:avoid}
+  .lsec{margin-bottom:8pt}
   .lhdr{padding:3pt 8pt;margin-bottom:4pt;background:#f8fafc;font-size:9pt;font-weight:bold}
-  table{width:100%;border-collapse:collapse;margin-bottom:4pt}
-  th{background:#f1f5f9;font-weight:bold;text-align:left;padding:4pt 6pt;font-size:8pt;text-transform:uppercase;letter-spacing:.04em;border:1px solid #cbd5e1}
-  td{padding:5pt 6pt;border:1px solid #e2e8f0;font-size:9pt;vertical-align:top}
+  table{width:100%;border-collapse:collapse;margin-bottom:4pt;table-layout:fixed}
+  th{background:#f1f5f9;font-weight:bold;text-align:left;padding:4pt 6pt;font-size:8pt;text-transform:uppercase;letter-spacing:.04em;border:1px solid #cbd5e1;overflow:hidden}
+  td{padding:5pt 6pt;border:1px solid #e2e8f0;font-size:9pt;vertical-align:top;word-wrap:break-word;overflow-wrap:break-word}
   tr:nth-child(even) td{background:#f8fafc}
   th.cb,td.cb{width:18pt;text-align:center}
-  th.narrow,td.narrow{width:38pt}
-  th.task,td.task{width:22%}
+  th.task,td.task{width:18%}
+  th.details,td.details{width:20%}
+  th.how,td.how{width:18%}
+  th.show2,td.show2{width:14%}
+  th.pri,td.pri{width:7%;text-align:center}
+  th.narrow,td.narrow{width:30pt;text-align:center}
+  th.supplies,td.supplies{width:13%}
   .chk{display:inline-block;width:12pt;height:12pt;border:1.5px solid #94a3b8;border-radius:3pt}
   .zone-hdr td{background:#f1f5f9!important;font-size:8.5pt;color:#475569;font-weight:bold;padding:3pt 6pt}
   .zindent td.task{padding-left:18pt}
@@ -1180,6 +1311,35 @@ ${sections}
       { key: "monthly",    label: "Monthly",    bar: "bg-violet-500",  light: "bg-violet-50",  border: "border-violet-200",  text: "text-violet-700",  pill: "bg-violet-100 text-violet-700",  abbr: "M", stroke: "#8b5cf6" },
     ];
 
+    // ─── PieChart ────────────────────────────────────────────────────────────────
+    function PieChart({ segments, size }) {
+      const sz = size || 120;
+      const cx = sz / 2, cy = sz / 2, r = sz / 2 - 4;
+      const total = segments.reduce((s, seg) => s + (seg.value || 0), 0);
+      if (total === 0) return null;
+      let angle = -Math.PI / 2;
+      const paths = segments.filter(s => s.value > 0).map(seg => {
+        const sweep = (seg.value / total) * 2 * Math.PI;
+        const x1 = cx + r * Math.cos(angle);
+        const y1 = cy + r * Math.sin(angle);
+        angle += sweep;
+        const x2 = cx + r * Math.cos(angle);
+        const y2 = cy + r * Math.sin(angle);
+        const largeArc = sweep > Math.PI ? 1 : 0;
+        const d = sweep >= 2 * Math.PI - 0.001
+          ? `M ${cx - r} ${cy} a ${r} ${r} 0 1 0 ${r * 2} 0 a ${r} ${r} 0 1 0 -${r * 2} 0`
+          : `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2} Z`;
+        return { d, color: seg.color };
+      });
+      return (
+        <svg width={sz} height={sz} viewBox={`0 0 ${sz} ${sz}`} style={{ flexShrink: 0 }}>
+          {paths.map((p, i) => <path key={i} d={p.d} fill={p.color} stroke="white" strokeWidth="2" />)}
+        </svg>
+      );
+    }
+
+    const ROOM_PIE_COLORS = ["#3b82f6","#f59e0b","#10b981","#8b5cf6","#ef4444","#06b6d4","#84cc16","#f97316","#ec4899","#6366f1","#14b8a6","#a855f7","#eab308","#22c55e","#fb923c","#a3e635"];
+
     // ─── LocationDashboard ───────────────────────────────────────────────────────
     function LocationDashboard({ loc, locData, locColor, onSelectRoom }) {
       const rooms = locData.rooms;
@@ -1212,6 +1372,35 @@ ${sections}
         if (b[0] === "Unassigned") return -1;
         return b[1] - a[1];
       });
+
+      // Time by employee (with per-list and per-frequency breakdown)
+      const empTimeMap = {};
+      LIST_META.forEach(({ key }) => {
+        byType[key].forEach(i => {
+          const k = i.assignee?.trim() || "Unassigned";
+          if (!empTimeMap[k]) empTimeMap[k] = { total: 0, restocking: 0, cleaning: 0, monthly: 0, byFreq: {} };
+          const m = parseMinutes(i.time);
+          empTimeMap[k].total += m;
+          empTimeMap[k][key] += m;
+          if (m > 0) {
+            const freq = i.frequency?.trim() || "Unscheduled";
+            empTimeMap[k].byFreq[freq] = (empTimeMap[k].byFreq[freq] || 0) + m;
+          }
+        });
+      });
+      const empTimes = Object.entries(empTimeMap)
+        .filter(([, d]) => d.total > 0)
+        .sort((a, b) => b[1].total - a[1].total);
+
+      // Time by room
+      const roomTimes = rooms.map(r => ({
+        id: r.id,
+        name: r.name,
+        mins: [...flattenList(r.restocking), ...flattenList(r.cleaning), ...flattenList(r.monthly)]
+                .reduce((s, i) => s + parseMinutes(i.time), 0),
+      })).filter(r => r.mins > 0).sort((a, b) => b.mins - a.mins);
+
+      const totalMins = timeByType.restocking + timeByType.cleaning + timeByType.monthly;
 
       // Priority breakdown
       const priorityCounts = PRIORITY_OPTIONS.map(p => ({
@@ -1392,6 +1581,153 @@ ${sections}
             })}
           </div>
 
+          {/* ── Time Breakdown card ── */}
+          {totalMins > 0 && (
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Time Breakdown</h3>
+                <span className="text-sm font-extrabold text-gray-700">{formatTime(totalMins)} total</span>
+              </div>
+              <div className="grid grid-cols-2 gap-6">
+
+                {/* By list — pie chart */}
+                <div>
+                  <p className="text-xs font-bold text-gray-500 mb-3">By List</p>
+                  <div className="flex items-center gap-4">
+                    <PieChart size={110} segments={LIST_META.map(({ key, stroke }) => ({ value: timeByType[key], color: stroke }))} />
+                    <div className="space-y-2 flex-1">
+                      {LIST_META.map(({ key, label, stroke }) => {
+                        const mins = timeByType[key];
+                        const pct = totalMins > 0 ? Math.round((mins / totalMins) * 100) : 0;
+                        return (
+                          <div key={key} className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full flex-none" style={{ backgroundColor: stroke }} />
+                            <span className="text-xs font-semibold text-gray-600 flex-1">{label}</span>
+                            <span className="text-xs text-gray-500 font-medium">{formatTime(mins)}</span>
+                            <span className="text-xs text-gray-300 w-7 text-right">{pct}%</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* By room — pie chart */}
+                <div>
+                  <p className="text-xs font-bold text-gray-500 mb-3">By Room</p>
+                  {roomTimes.length === 0
+                    ? <p className="text-xs text-gray-300 italic">No timed tasks</p>
+                    : <div className="flex items-center gap-4">
+                        <PieChart size={110} segments={roomTimes.map(({ mins }, i) => ({ value: mins, color: ROOM_PIE_COLORS[i % ROOM_PIE_COLORS.length] }))} />
+                        <div className="space-y-1.5 flex-1 overflow-y-auto" style={{ maxHeight: 120 }}>
+                          {roomTimes.map(({ id, name, mins }, i) => {
+                            const pct = totalMins > 0 ? Math.round((mins / totalMins) * 100) : 0;
+                            return (
+                              <div key={id} className="flex items-center gap-2">
+                                <span className="w-2.5 h-2.5 rounded-full flex-none" style={{ backgroundColor: ROOM_PIE_COLORS[i % ROOM_PIE_COLORS.length] }} />
+                                <span className="text-xs font-semibold text-gray-600 flex-1 truncate">{name}</span>
+                                <span className="text-xs text-gray-500 font-medium flex-none">{formatTime(mins)}</span>
+                                <span className="text-xs text-gray-300 w-7 text-right flex-none">{pct}%</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                  }
+                </div>
+
+              </div>
+            </div>
+          )}
+
+          {/* ── Time Breakdown by Employee ── */}
+          {empTimes.length > 0 && (
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Time Breakdown by Employee</h3>
+                <span className="text-xs text-gray-400 font-medium">{formatTime(empTimes.reduce((s, [, d]) => s + d.total, 0))} assigned</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {empTimes.map(([name, data]) => {
+                  const isUnassigned = name === "Unassigned";
+                  const maxMins = empTimes[0][1].total;
+                  const pct = maxMins > 0 ? Math.round((data.total / maxMins) * 100) : 0;
+                  const emp = employees.find(e => e.name === name);
+                  return (
+                    <div key={name} className="p-3 bg-gray-50 rounded-xl">
+                      {/* Header row: avatar + name + total */}
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-none ${isUnassigned ? "bg-gray-200 text-gray-400" : "bg-blue-600 text-white"}`}>
+                          {isUnassigned ? "?" : name.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex justify-between items-baseline">
+                            <span className={`text-xs font-semibold truncate ${isUnassigned ? "text-gray-400 italic" : "text-gray-700"}`}>{name}</span>
+                            <span className="text-xs font-bold text-gray-600 ml-2 flex-none">{formatTime(data.total)}</span>
+                          </div>
+                          {emp?.role && <p className="text-[10px] text-gray-400 truncate">{emp.role}</p>}
+                        </div>
+                      </div>
+                      {/* Total bar */}
+                      <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden mb-2.5">
+                        <div className={`h-1.5 rounded-full transition-all ${isUnassigned ? "bg-gray-300" : "bg-blue-400"}`} style={{ width: `${pct}%` }} />
+                      </div>
+                      {/* Per-list breakdown */}
+                      <div className="space-y-1 mb-2.5">
+                        {LIST_META.map(({ key, stroke, abbr }) => {
+                          const lMins = data[key];
+                          if (!lMins) return null;
+                          const lPct = data.total > 0 ? Math.round((lMins / data.total) * 100) : 0;
+                          return (
+                            <div key={key} className="flex items-center gap-1.5">
+                              <span className="text-[10px] font-bold w-4 flex-none" style={{ color: stroke }}>{abbr}</span>
+                              <div className="flex-1 h-1 bg-gray-200 rounded-full overflow-hidden">
+                                <div className="h-1 rounded-full" style={{ width: `${lPct}%`, backgroundColor: stroke }} />
+                              </div>
+                              <span className="text-[10px] text-gray-400 w-12 text-right flex-none">{formatTime(lMins)}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {/* Per-frequency breakdown */}
+                      {Object.keys(data.byFreq).length > 0 && (
+                        <>
+                          <div className="border-t border-gray-200 mb-2" />
+                          <div className="space-y-1">
+                            {FREQUENCY_OPTIONS.filter(f => data.byFreq[f]).map(freq => {
+                              const fMins = data.byFreq[freq];
+                              const fPct = data.total > 0 ? Math.round((fMins / data.total) * 100) : 0;
+                              const freqColors = { "Weekly":"#0ea5e9", "Bi-Weekly":"#06b6d4", "Monthly":"#8b5cf6", "Quarterly":"#6366f1", "Yearly":"#ec4899", "As Needed":"#f59e0b" };
+                              const col = freqColors[freq] || "#9ca3af";
+                              return (
+                                <div key={freq} className="flex items-center gap-1.5">
+                                  <span className="text-[10px] font-semibold flex-none truncate" style={{ color: col, width: 52 }}>{freq}</span>
+                                  <div className="flex-1 h-1 bg-gray-200 rounded-full overflow-hidden">
+                                    <div className="h-1 rounded-full" style={{ width: `${fPct}%`, backgroundColor: col }} />
+                                  </div>
+                                  <span className="text-[10px] text-gray-400 w-12 text-right flex-none">{formatTime(fMins)}</span>
+                                </div>
+                              );
+                            })}
+                            {data.byFreq["Unscheduled"] && (
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] font-semibold text-gray-400 flex-none italic" style={{ width: 52 }}>None</span>
+                                <div className="flex-1 h-1 bg-gray-200 rounded-full overflow-hidden">
+                                  <div className="h-1 rounded-full bg-gray-300" style={{ width: `${data.total > 0 ? Math.round((data.byFreq["Unscheduled"] / data.total) * 100) : 0}%` }} />
+                                </div>
+                                <span className="text-[10px] text-gray-400 w-12 text-right flex-none">{formatTime(data.byFreq["Unscheduled"])}</span>
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* ── Priority breakdown ── */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-5">
             <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Priority Breakdown</h3>
@@ -1495,40 +1831,6 @@ ${sections}
               )}
             </div>
           </div>
-
-          {/* ── Room overview ── */}
-          {rooms.length > 0 && (
-            <div>
-              <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Rooms & Areas</h3>
-              <div className="grid grid-cols-3 gap-3">
-                {rooms.map(room => {
-                  const flatR = flattenList(room.restocking), flatC = flattenList(room.cleaning), flatM = flattenList(room.monthly);
-                  const totalRoom = flatR.length + flatC.length + flatM.length;
-                  const roomMins  = [...flatR, ...flatC, ...flatM].reduce((s, i) => s + parseMinutes(i.time), 0);
-                  return (
-                    <button
-                      key={room.id}
-                      onClick={() => onSelectRoom(room.id)}
-                      className="text-left bg-white rounded-xl border border-gray-200 shadow-sm p-3.5 hover:border-blue-300 hover:shadow-md transition-all group/card"
-                    >
-                      <div className="flex items-start justify-between mb-2.5">
-                        <p className="text-sm font-bold text-gray-800 group-hover/card:text-blue-700 transition-colors">{room.name}</p>
-                        {roomMins > 0 && <span className="text-xs text-gray-400 flex-none ml-2">{formatTime(roomMins)}</span>}
-                      </div>
-                      <div className="flex gap-1.5">
-                        {LIST_META.map(({ key, abbr, pill }) => (
-                          <span key={key} className={`text-xs px-2 py-0.5 rounded-full font-semibold ${pill}`}>
-                            {flattenList(room[key]).length} {abbr}
-                          </span>
-                        ))}
-                      </div>
-                      <p className="text-xs text-gray-400 mt-2">{totalRoom} task{totalRoom !== 1 ? "s" : ""}</p>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
           {/* Empty state */}
           {rooms.length === 0 && (
@@ -2486,6 +2788,8 @@ ${sections}
         });
       };
 
+      const filtersActive = !!(filterText || filterPriority !== "All" || filterFrequency !== "All" || filterStatus !== "all" || filterAssignee !== "All");
+
       const requestConfirm = (message, onConfirm) => setConfirmState({ message, onConfirm });
 
       const setLoc2 = (l) => { setLoc(l); setRoomId(null); setView("restocking"); resetFilters(); };
@@ -2493,6 +2797,15 @@ ${sections}
       const upd = (fn) => setData(prev => ({ ...prev, [loc]: fn(prev[loc]) }));
       const updRoom = (fn) => upd(d => ({ ...d, rooms: d.rooms.map(r => r.id === roomId ? fn(r) : r) }));
       const updList = (key, fn) => updRoom(r => ({ ...r, [key]: fn(r[key] ?? []) }));
+      const updateItemInAnyRoom = (rid, key, id, field, val) =>
+        upd(d => ({ ...d, rooms: d.rooms.map(r => r.id !== rid ? r : {
+          ...r, [key]: (r[key] ?? []).map(e => e.type === 'zone'
+            ? { ...e, items: field === '__delete__'
+                ? e.items.filter(t => t.id !== id)
+                : e.items.map(t => t.id === id ? { ...t, [field]: val, ...(field==='completed'&&val ? {lastCompleted:new Date().toLocaleDateString("en-US",{month:"2-digit",day:"2-digit",year:"2-digit"})} : {}) } : t) }
+            : field === '__delete__' ? null : e.id === id ? { ...e, [field]: val, ...(field==='completed'&&val ? {lastCompleted:new Date().toLocaleDateString("en-US",{month:"2-digit",day:"2-digit",year:"2-digit"})} : {}) } : e)
+          .filter(Boolean)
+        })}));
 
       // Room ops
       const reorderRooms = (fromIdx, toIdx) => {
@@ -2522,6 +2835,23 @@ ${sections}
 
       // Employee ops
       const updateEmployees = (employees) => upd(d => ({ ...d, employees }));
+
+      // Bulk-set a field on every task in a list (including inside zones)
+      const bulkSetList = (key, field, value) => updList(key, list => {
+        const applyToItem = item => ({ ...item, [field]: value });
+        return list.map(e => e.type === 'zone' ? { ...e, items: e.items.map(applyToItem) } : applyToItem(e));
+      });
+
+      const bulkMarkDone = (key) => updList(key, list => {
+        const now = new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" });
+        const applyToItem = item => (!item.completed && !item.notNeeded) ? { ...item, completed: true, lastCompleted: now } : item;
+        return list.map(e => e.type === 'zone' ? { ...e, items: e.items.map(applyToItem) } : applyToItem(e));
+      });
+
+      const bulkMarkNotNeeded = (key) => updList(key, list => {
+        const applyToItem = item => (!item.completed && !item.notNeeded) ? { ...item, notNeeded: true } : item;
+        return list.map(e => e.type === 'zone' ? { ...e, items: e.items.map(applyToItem) } : applyToItem(e));
+      });
 
       // Import ops
       const handleImportData = (importedRooms, mode) => {
@@ -2667,6 +2997,32 @@ ${sections}
       });
 
       // Move a task from one list type to another (e.g. restocking → monthly)
+      const moveTaskToRoom = (sourceKey, taskId, targetRoomId) => {
+        upd(d => {
+          let task = null;
+          const afterRemove = d.rooms.map(r => {
+            if (r.id !== roomId) return r;
+            const newList = (r[sourceKey] ?? []).map(e => {
+              if (e.type === 'zone') {
+                const idx = e.items.findIndex(t => t.id === taskId);
+                if (idx >= 0) { task = { ...e.items[idx] }; return { ...e, items: e.items.filter(t => t.id !== taskId) }; }
+                return e;
+              }
+              if (e.id === taskId) { task = { ...e }; return null; }
+              return e;
+            }).filter(Boolean);
+            return { ...r, [sourceKey]: newList };
+          });
+          if (!task) return d;
+          return {
+            ...d,
+            rooms: afterRemove.map(r =>
+              r.id !== targetRoomId ? r : { ...r, [sourceKey]: [...(r[sourceKey] ?? []), task] }
+            ),
+          };
+        });
+      };
+
       const moveTaskToList = (sourceKey, targetKey, taskId) => {
         if (sourceKey === targetKey) return;
         updRoom(r => {
@@ -3044,7 +3400,7 @@ ${sections}
                     ) : (
                       <>
                         <button
-                          onClick={() => { setRoomId(r.id); setView("restocking"); resetFilters(); }}
+                          onClick={() => { setRoomId(r.id); resetFilters(); }}
                           className={`flex-1 text-left px-3 py-2 text-xs font-semibold ${
                             roomId === r.id ? "text-white" : "text-gray-600"
                           }`}
@@ -3132,7 +3488,7 @@ ${sections}
                   loc={loc}
                   locData={locData}
                   locColor={locColor}
-                  onSelectRoom={(id) => { setRoomId(id); setView("restocking"); resetFilters(); }}
+                  onSelectRoom={(id) => { setRoomId(id); resetFilters(); }}
                 />
               ) : (
                 <div className="p-5 max-w-none">
@@ -3206,7 +3562,7 @@ ${sections}
 
                   {/* Filter bar */}
                   <FilterBar
-                    allItems={flattenList(room[view] || [])}
+                    allItems={locData.rooms.flatMap(r => LIST_META.flatMap(({ key }) => flattenList(r[key] || [])))}
                     employees={locData.employees ?? []}
                     text={filterText}
                     priority={filterPriority}
@@ -3221,7 +3577,137 @@ ${sections}
                     onClear={resetFilters}
                   />
 
-                  {/* Checklist panels */}
+                  {/* Checklist panels — cross-room search results when any filter is active */}
+                  {filtersActive ? (() => {
+                    const listColor = { restocking:"amber", cleaning:"emerald", monthly:"violet" };
+                    const listDot   = { restocking:"bg-amber-400", cleaning:"bg-emerald-400", monthly:"bg-violet-400" };
+                    const listLabel = { restocking:"Restocking", cleaning:"Cleaning", monthly:"Monthly" };
+                    let totalMatches = 0;
+                    const sections = locData.rooms.map(r => {
+                      const listSections = LIST_META.map(({ key }) => {
+                        const matches = applyFilters(r[key] || []);
+                        const flat = flattenList(matches);
+                        if (flat.length === 0) return null;
+                        totalMatches += flat.length;
+                        const c = ACCENT[listColor[key]] || ACCENT.amber;
+                        return (
+                          <div key={key} className="mb-3">
+                            <div className={`${c.bg} ${c.border} px-3 py-1.5 flex items-center gap-2 border-b border-gray-100 rounded-t-lg`}>
+                              <span className={`w-2 h-2 rounded-full flex-none ${listDot[key]}`} />
+                              <span className={`font-bold text-xs uppercase tracking-widest ${c.title}`}>{listLabel[key]}</span>
+                              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${c.count}`}>{flat.length} match{flat.length !== 1 ? "es" : ""}</span>
+                            </div>
+                            <table className="w-full text-xs border border-t-0 border-gray-200 rounded-b-lg overflow-hidden">
+                              <thead>
+                                <tr className="bg-gray-50 border-b border-gray-200">
+                                  <th className="w-7 py-1.5"></th>
+                                  <th className="w-7 py-1.5"></th>
+                                  <th className="text-left px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-1/5">Task</th>
+                                  <th className="text-left px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-1/5">Details</th>
+                                  <th className="text-left px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-1/6">How?</th>
+                                  <th className="text-left px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-16">Priority</th>
+                                  <th className="text-left px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-14">Who</th>
+                                  <th className="text-left px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-14">Time</th>
+                                  <th className="text-left px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-1/6">Supplies</th>
+                                  <th className="w-6 py-1.5"></th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {matches.map(entry => {
+                                  if (entry.type === 'zone') {
+                                    return [
+                                      <tr key={entry.id + "-zh"} className="bg-gray-50">
+                                        <td colSpan={10} className="px-3 py-1 text-xs text-gray-500 font-semibold">
+                                          <span className="mr-1 text-gray-400">{'>'}</span>{entry.name}
+                                        </td>
+                                      </tr>,
+                                      ...entry.items.map(item => (
+                                        <tr key={item.id} className={`border-t border-gray-100 ${item.completed || item.notNeeded ? "opacity-50" : ""}`}>
+                                          <td className="pl-4 pr-1 py-1.5 text-center">
+                                            <input type="checkbox" checked={!!item.completed} onChange={e => updateItemInAnyRoom(r.id, key, item.id, "completed", e.target.checked)} className="cursor-pointer" />
+                                          </td>
+                                          <td className="px-1 py-1.5 text-center">
+                                            <input type="checkbox" checked={!!item.notNeeded} onChange={e => updateItemInAnyRoom(r.id, key, item.id, "notNeeded", e.target.checked)} className="cursor-pointer accent-gray-400" title="Not needed" />
+                                          </td>
+                                          <td className="px-1 py-1"><EditableCell value={item.task} onSave={val => updateItemInAnyRoom(r.id, key, item.id, "task", val)} /></td>
+                                          <td className="px-1 py-1"><EditableCell value={item.details} onSave={val => updateItemInAnyRoom(r.id, key, item.id, "details", val)} /></td>
+                                          <td className="px-1 py-1"><EditableCell value={item.how} onSave={val => updateItemInAnyRoom(r.id, key, item.id, "how", val)} /></td>
+                                          <td className="px-1 py-1.5">
+                                            <select value={item.priority || ""} onChange={e => updateItemInAnyRoom(r.id, key, item.id, "priority", e.target.value)} className="w-full text-xs rounded border border-transparent bg-transparent cursor-pointer text-gray-700 hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-400 py-0.5 px-1">
+                                              <option value="">—</option>
+                                              {PRIORITY_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                                            </select>
+                                          </td>
+                                          <td className="px-1 py-1.5 text-center">
+                                            <AssigneeCell value={item.assignee} employees={locData.employees ?? []} onSave={val => updateItemInAnyRoom(r.id, key, item.id, "assignee", val)} />
+                                          </td>
+                                          <td className="px-1 py-1"><EditableCell value={item.time} onSave={val => updateItemInAnyRoom(r.id, key, item.id, "time", val)} placeholder="—" /></td>
+                                          <td className="px-1 py-1"><EditableCell value={item.supplies} onSave={val => updateItemInAnyRoom(r.id, key, item.id, "supplies", val)} /></td>
+                                          <td className="px-1 py-1.5 text-center">
+                                            <button onClick={() => requestConfirm("Delete this task? This cannot be undone.", () => updateItemInAnyRoom(r.id, key, item.id, "__delete__", true))} className="text-gray-300 hover:text-red-500 text-xs leading-none">✕</button>
+                                          </td>
+                                        </tr>
+                                      ))
+                                    ];
+                                  }
+                                  return (
+                                    <tr key={entry.id} className={`border-t border-gray-100 ${entry.completed || entry.notNeeded ? "opacity-50" : ""}`}>
+                                      <td className="px-2 py-1.5 text-center">
+                                        <input type="checkbox" checked={!!entry.completed} onChange={e => updateItemInAnyRoom(r.id, key, entry.id, "completed", e.target.checked)} className="cursor-pointer" />
+                                      </td>
+                                      <td className="px-1 py-1.5 text-center">
+                                        <input type="checkbox" checked={!!entry.notNeeded} onChange={e => updateItemInAnyRoom(r.id, key, entry.id, "notNeeded", e.target.checked)} className="cursor-pointer accent-gray-400" title="Not needed" />
+                                      </td>
+                                      <td className="px-1 py-1"><EditableCell value={entry.task} onSave={val => updateItemInAnyRoom(r.id, key, entry.id, "task", val)} /></td>
+                                      <td className="px-1 py-1"><EditableCell value={entry.details} onSave={val => updateItemInAnyRoom(r.id, key, entry.id, "details", val)} /></td>
+                                      <td className="px-1 py-1"><EditableCell value={entry.how} onSave={val => updateItemInAnyRoom(r.id, key, entry.id, "how", val)} /></td>
+                                      <td className="px-1 py-1.5">
+                                        <select value={entry.priority || ""} onChange={e => updateItemInAnyRoom(r.id, key, entry.id, "priority", e.target.value)} className="w-full text-xs rounded border border-transparent bg-transparent cursor-pointer text-gray-700 hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-400 py-0.5 px-1">
+                                          <option value="">—</option>
+                                          {PRIORITY_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                                        </select>
+                                      </td>
+                                      <td className="px-1 py-1.5 text-center">
+                                        <AssigneeCell value={entry.assignee} employees={locData.employees ?? []} onSave={val => updateItemInAnyRoom(r.id, key, entry.id, "assignee", val)} />
+                                      </td>
+                                      <td className="px-1 py-1"><EditableCell value={entry.time} onSave={val => updateItemInAnyRoom(r.id, key, entry.id, "time", val)} placeholder="—" /></td>
+                                      <td className="px-1 py-1"><EditableCell value={entry.supplies} onSave={val => updateItemInAnyRoom(r.id, key, entry.id, "supplies", val)} /></td>
+                                      <td className="px-1 py-1.5 text-center">
+                                        <button onClick={() => requestConfirm("Delete this task? This cannot be undone.", () => updateItemInAnyRoom(r.id, key, entry.id, "__delete__", true))} className="text-gray-300 hover:text-red-500 text-xs leading-none">✕</button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        );
+                      }).filter(Boolean);
+                      if (listSections.length === 0) return null;
+                      return (
+                        <div key={r.id} className="mb-5">
+                          <button
+                            onClick={() => { setRoomId(r.id); resetFilters(); }}
+                            className="flex items-center gap-2 mb-2 group"
+                            title="Go to this room"
+                          >
+                            <h3 className="font-bold text-sm text-gray-700 group-hover:text-blue-600 transition-colors">{r.name}</h3>
+                            <span className="text-xs text-gray-400 group-hover:text-blue-400 transition-colors">go to room &rsaquo;</span>
+                          </button>
+                          {listSections}
+                        </div>
+                      );
+                    }).filter(Boolean);
+                    return (
+                      <div className="p-4">
+                        {sections.length === 0
+                          ? <div className="text-center py-16 text-gray-400 text-sm">No tasks match your filters across any room.</div>
+                          : sections
+                        }
+                      </div>
+                    );
+                  })() : (
+                  <>
                   {view === "restocking" && (
                     <ChecklistPanel
                       title="Restocking"
@@ -3229,6 +3715,7 @@ ${sections}
                       list={applyFilters(room.restocking)}
                       employees={locData.employees ?? []}
                       onUpdate={(id, f, v) => updateItem("restocking", id, f, v)}
+                      onBulkSet={(f, v) => bulkSetList("restocking", f, v)}
                       onAdd={() => addItem("restocking")}
                       onDelete={id => requestConfirm("Delete this task? This cannot be undone.", () => deleteItem("restocking", id))}
                       onMove={(id, dir) => moveItem("restocking", id, dir)}
@@ -3244,6 +3731,11 @@ ${sections}
                       requestConfirm={requestConfirm}
                       listKey="restocking"
                       onMoveToList={(taskId, targetKey) => moveTaskToList("restocking", targetKey, taskId)}
+                      rooms={locData.rooms}
+                      currentRoomId={roomId}
+                      onMoveToRoom={(taskId, targetRoomId) => moveTaskToRoom("restocking", taskId, targetRoomId)}
+                      onBulkDone={() => bulkMarkDone("restocking")}
+                      onBulkNotNeeded={() => bulkMarkNotNeeded("restocking")}
                     />
                   )}
                   {view === "cleaning" && (
@@ -3253,6 +3745,7 @@ ${sections}
                       list={applyFilters(room.cleaning)}
                       employees={locData.employees ?? []}
                       onUpdate={(id, f, v) => updateItem("cleaning", id, f, v)}
+                      onBulkSet={(f, v) => bulkSetList("cleaning", f, v)}
                       onAdd={() => addItem("cleaning")}
                       onDelete={id => requestConfirm("Delete this task? This cannot be undone.", () => deleteItem("cleaning", id))}
                       onMove={(id, dir) => moveItem("cleaning", id, dir)}
@@ -3268,6 +3761,11 @@ ${sections}
                       requestConfirm={requestConfirm}
                       listKey="cleaning"
                       onMoveToList={(taskId, targetKey) => moveTaskToList("cleaning", targetKey, taskId)}
+                      rooms={locData.rooms}
+                      currentRoomId={roomId}
+                      onMoveToRoom={(taskId, targetRoomId) => moveTaskToRoom("cleaning", taskId, targetRoomId)}
+                      onBulkDone={() => bulkMarkDone("cleaning")}
+                      onBulkNotNeeded={() => bulkMarkNotNeeded("cleaning")}
                     />
                   )}
                   {view === "monthly" && (
@@ -3277,6 +3775,7 @@ ${sections}
                       list={applyFilters(room.monthly)}
                       employees={locData.employees ?? []}
                       onUpdate={(id, f, v) => updateItem("monthly", id, f, v)}
+                      onBulkSet={(f, v) => bulkSetList("monthly", f, v)}
                       onAdd={() => addItem("monthly")}
                       onDelete={id => requestConfirm("Delete this task? This cannot be undone.", () => deleteItem("monthly", id))}
                       onMove={(id, dir) => moveItem("monthly", id, dir)}
@@ -3292,7 +3791,14 @@ ${sections}
                       requestConfirm={requestConfirm}
                       listKey="monthly"
                       onMoveToList={(taskId, targetKey) => moveTaskToList("monthly", targetKey, taskId)}
+                      rooms={locData.rooms}
+                      currentRoomId={roomId}
+                      onMoveToRoom={(taskId, targetRoomId) => moveTaskToRoom("monthly", taskId, targetRoomId)}
+                      onBulkDone={() => bulkMarkDone("monthly")}
+                      onBulkNotNeeded={() => bulkMarkNotNeeded("monthly")}
                     />
+                  )}
+                  </>
                   )}
                 </div>
               )}
